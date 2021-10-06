@@ -36,14 +36,20 @@ use App\Reputation;
 use App\EmailerTriggerAdmin;
 use App\EmailerTriggerUser;
 use App\EmailerAdmin;
+use App\Exports\ProposalExport;
 use App\FinalGrant;
+use App\GrantTracking;
 use App\Signature;
 
 use App\Mail\TwoFA;
 use App\Mail\AdminAlert;
 use App\Mail\UserAlert;
+use App\MilestoneReview;
 use App\SignatureGrant;
+use App\Survey;
+use App\SurveyRank;
 use Illuminate\Support\Facades\DB;
+use Maatwebsite\Excel\Facades\Excel;
 use PDF;
 
 class SharedController extends Controller
@@ -715,6 +721,8 @@ class SharedController extends Controller
 			// Emailer Member
 			Helper::triggerMemberEmail('New Vote', $emailerData, $proposal, $vote);
 
+			Helper::createGrantTracking($proposalId, "Informal vote started", 'informal_vote_started');
+
 			return ['success' => true];
 		}
 
@@ -782,6 +790,8 @@ class SharedController extends Controller
 				if ($op) {
 					$op->profile->rep = (float) $op->profile->rep + $rep;
 					$op->profile->save();
+					Helper::createRepHistory($op->id, $rep,	$op->profile->rep, 'Gained', 'forceWithdrawProposal', null);
+
 				}
 			}
 			// remove proposal change
@@ -839,7 +849,7 @@ class SharedController extends Controller
 
 			// Check Proposal Status
 			if (
-				($proposal->status != "payment" && $proposal->status != "pending" && $proposal->status != "approved") || 
+				($proposal->status != "payment" && $proposal->status != "pending" && $proposal->status != "approved") ||
 				$proposal->doc_paid || $proposal->votes->count() > 0
 			) {
 				return [
@@ -906,7 +916,7 @@ class SharedController extends Controller
 
 			if ($user->hasRole('admin')) {
 				// Admin can only edit pending proposal
-				if ($proposal->status != 'pending') {
+				if ($proposal->status != 'pending' && $proposal->status != 'approved') {
 					return [
 						'success' => false,
 						'message' => 'Invalid proposal'
@@ -914,7 +924,7 @@ class SharedController extends Controller
 				}
 			} else {
 				// OP can only edit denied proposal
-				if ($proposal->status != 'denied' || $proposal->user_id != $user->id) {
+				if  ($proposal->user_id != $user->id) {
 					return [
 						'success' => false,
 						'message' => 'Invalid proposal'
@@ -939,7 +949,6 @@ class SharedController extends Controller
 			// Updating Proposal
 			$proposal->title = $title;
 			$proposal->short_description = $short_description;
-			$proposal->status = 'pending';
 			$proposal->save();
 
 			return [
@@ -1185,11 +1194,11 @@ class SharedController extends Controller
 				$proposal->tags = implode(",", $tags);
 
 			$proposal->member_required = $memberRequired;
-			if ($proposal->pdf) {
+			// if ($proposal->pdf) {
 
-				$pdf = PDF::loadView('proposal_pdf', compact('proposal'));
-				Storage::disk('local')->put(substr($proposal->pdf, 9), $pdf->output());
-			}
+			// 	$pdf = PDF::loadView('proposal_pdf', compact('proposal'));
+			// 	Storage::disk('local')->put(substr($proposal->pdf, 9), $pdf->output());
+			// }
 
 			$proposal->save();
 
@@ -1323,6 +1332,14 @@ class SharedController extends Controller
 				}
 			}
 
+			if ($proposal->pdf) {
+
+				$pdf = PDF::loadView('proposal_pdf', compact('proposal'));
+				Storage::disk('local')->put(substr($proposal->pdf, 9), $pdf->output());
+			}
+
+			$proposal->save();
+
 			return [
 				'success' => true,
 				'proposal' => $proposal
@@ -1407,6 +1424,9 @@ class SharedController extends Controller
 				'crypto',
 				'grants',
 				'milestones',
+				'milestones.milestoneCheckList',
+				'milestones.milestoneReview.user',
+				'milestones.milestoneSubmitHistories',
 				'citations',
 				'citations.repProposal',
 				'citations.repProposal.user',
@@ -1414,8 +1434,12 @@ class SharedController extends Controller
 				'members',
 				'files',
 				'votes',
-				'onboarding'
+				'onboarding',
+				'surveyRanks.survey',
 			])
+			->with(['surveyRanks' => function ($q) {
+				$q->orderBy('rank', 'desc');
+			}])
 			->has('user')
 			->has('user.profile')
 			->first();
@@ -1461,6 +1485,7 @@ class SharedController extends Controller
 			// Total Members
 			$proposal->totalMembers = Helper::getTotalMemberProposal($proposalId);
 
+			
 			if ($proposal->votes && count($proposal->votes)) {
 				foreach ($proposal->votes as $vote) {
 					$vote->totalVotes = VoteResult::where('proposal_id', $proposal->id)
@@ -1598,27 +1623,59 @@ class SharedController extends Controller
 				$proposals = $proposals->where('final_grant.status', '!=', 'pending');
 			}
 			$proposals = $proposals->has('proposal.milestones')
-				->has('user')
-				->whereHas('proposal', function ($query) use ($search) {
-					$query->where('proposal.title', 'like', '%' . $search . '%');
+			->has('user')
+			->where(function ($subQuery)  use ($search) {
+				$subQuery->whereHas('proposal', function ($query) use ($search) {
+					$query->where('proposal.title', 'like', '%' . $search . '%')
+						->orWhere('proposal.id', 'like', '%' . $search . '%');
 				})
+					->orWhereHas('user', function ($query)  use ($search) {
+						$query->where('users.email', 'like', '%' . $search . '%');
+					});
+			})
 				->orderBy($sort_key, $sort_direction)
 				->offset($start)
 				->limit($limit)
 				->get();
+			foreach ($proposals as $proposal) {
+				$in_review = 0;
+				$milestones = $proposal->proposal->milestones;
+				$milestones_submitted = $proposal->milestones_submitted;
+				$milestone =  $milestones[$milestones_submitted] ?? null;
+				if ($milestone) {
+					$milestoneReview = MilestoneReview::where('milestone_id', $milestone->id)->whereIn('status', ['pending', 'active'])->first();
+					if($milestoneReview)  {
+						$in_review = 1;
+					}
+				}
+				$proposal->in_review = $in_review;
+			}
 		} else {
 			$proposals = FinalGrant::with(['proposal', 'proposal.user', 'proposal.milestones', 'proposal.votes', 'user', 'signtureGrants'])
-				->has('proposal.milestones')
-				->has('proposal.votes')
-				->has('user')
-				->whereHas('proposal', function ($query) use ($search) {
-					$query->where('proposal.title', 'like', '%' . $search . '%');
-				})
+			->has('proposal.milestones')
+			->has('proposal.votes')
+			->has('user')
+			->whereHas('proposal', function ($query) use ($search) {
+				$query->where('proposal.title', 'like', '%' . $search . '%');
+			})
 				->where('user_id', $user->id)
 				->orderBy($sort_key, $sort_direction)
 				->offset($start)
 				->limit($limit)
 				->get();
+			foreach ($proposals as $proposal) {
+				$in_review = 0;
+				$milestones = $proposal->proposal->milestones;
+				$milestones_submitted = $proposal->milestones_submitted;
+				$milestone =  $milestones[$milestones_submitted] ?? null;
+				if ($milestone) {
+					$milestoneReview = MilestoneReview::where('milestone_id', $milestone->id)->whereIn('status', ['pending', 'active'])->first();
+					if($milestoneReview)  {
+						$in_review = 1;
+					}
+				}
+				$proposal->in_review = $in_review;
+			}
 		}
 
 		return [
@@ -1980,6 +2037,7 @@ class SharedController extends Controller
 		// Variables
 		$sort_key = $sort_direction = $search = '';
 		$page_id = 0;
+		$ignore_previous_winner = $request->ignore_previous_winner;
 		$data = $request->all();
 		if ($data && is_array($data)) extract($data);
 
@@ -1990,15 +2048,29 @@ class SharedController extends Controller
 
 		$limit = isset($data['limit']) ? $data['limit'] : 10;
 		$start = $limit * ($page_id - 1);
+		$is_winner = $request->is_winner;
 
 		// Record
 		if ($user) {
 			$proposals = Proposal::where('proposal.status', 'approved')
+				->with(['surveyRanks' => function ($q) {
+					$q->where('is_winner', 1)
+					->orderBy('rank', 'desc');
+				}])
 				->doesntHave('votes')
-				->where(function ($query) use ($search) {
+				->where(function ($query) use ($search, $is_winner, $ignore_previous_winner) {
 					if ($search) {
 						$query->where('proposal.title', 'like', '%' . $search . '%')
 							->orWhere('proposal.member_reason', 'like', '%' . $search . '%');
+					}
+					if($is_winner) {
+						$query->whereHas('surveyRanks', function($q){
+							$q->where('is_winner', 1);
+						});
+					}
+					if($ignore_previous_winner == 1) {
+						$survey_rank_ids = SurveyRank::where('is_winner', 1)->pluck('proposal_id');
+						$query->whereNotIn('proposal.id', $survey_rank_ids->toArray());
 					}
 				})
 				->orderBy($sort_key, $sort_direction)
@@ -2167,7 +2239,7 @@ class SharedController extends Controller
 		$page_id = (int) $page_id;
 		if ($page_id <= 0) $page_id = 1;
 
-		$limit = isset($data['limit']) ? $data['limit'] : 10;
+		$limit = isset($data['limit']) ? $data['limit'] : 20;
 		$start = $limit * ($page_id - 1);
 
 		// Records
@@ -2250,6 +2322,28 @@ class SharedController extends Controller
 	{
 		$user = Auth::user();
 		$votes = [];
+		$settings = Helper::getSettings();
+		$minsFormal = $minsSimple = $minsMileStone = 0;
+		if ($settings['time_unit_formal'] == 'min')
+			$minsFormal = (int) $settings['time_formal'];
+		else if ($settings['time_unit_formal'] == 'hour')
+			$minsFormal = (int) $settings['time_formal'] * 60;
+		else if ($settings['time_unit_formal'] == 'day')
+			$minsFormal = (int) $settings['time_formal'] * 60 * 24;
+
+		if ($settings['time_unit_simple'] == 'min')
+			$minsSimple = (int) $settings['time_simple'];
+		else if ($settings['time_unit_simple'] == 'hour')
+			$minsSimple = (int) $settings['time_simple'] * 60;
+		else if ($settings['time_unit_simple'] == 'day')
+			$minsSimple = (int) $settings['time_simple'] * 60 * 24;
+
+		if ($settings['time_unit_milestone'] == 'min')
+			$minsMileStone = (int) $settings['time_milestone'];
+		else if ($settings['time_unit_milestone'] == 'hour')
+			$minsMileStone = (int) $settings['time_milestone'] * 60;
+		else if ($settings['time_unit_milestone'] == 'day')
+			$minsMileStone = (int) $settings['time_milestone'] * 60 * 24;
 
 		// Variables
 		$sort_key = $sort_direction = $search = '';
@@ -2301,7 +2395,12 @@ class SharedController extends Controller
 						'vote_result.type as vote_result_type',
 						'vote_result.value as vote_result_value',
 						'vote2.result_count as total_member',
-						DB::raw('(CASE WHEN vote.content_type = \'grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros')
+						DB::raw('(CASE WHEN vote.content_type = \'grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
+						DB::raw("(CASE WHEN vote.content_type = 'grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsFormal MINUTE, current_timestamp())  
+							WHEN vote.content_type = 'milestone' THEN TIMEDIFF(vote.created_at + INTERVAL $minsMileStone MINUTE, current_timestamp())
+							WHEN vote.content_type = 'simple' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
+							ELSE null END ) AS timeLeft")
+
 					])
 					->orderBy($sort_key, $sort_direction)
 					->groupBy('vote.id')
@@ -2336,7 +2435,12 @@ class SharedController extends Controller
 						'users.id as user_id',
 						'vote.*',
 						// 'vote2.result_count as total_member',
-						DB::raw('(CASE WHEN vote.content_type = \'grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros')
+						DB::raw('(CASE WHEN vote.content_type = \'grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
+						DB::raw("(CASE WHEN vote.content_type = 'grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsFormal MINUTE, current_timestamp())  
+							WHEN vote.content_type = 'milestone' THEN TIMEDIFF(vote.created_at + INTERVAL $minsMileStone MINUTE, current_timestamp())
+							WHEN vote.content_type = 'simple' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
+							ELSE null END ) AS timeLeft")
+
 					])
 					->orderBy($sort_key, $sort_direction)
 					->offset($start)
@@ -2380,7 +2484,28 @@ class SharedController extends Controller
 	{
 		$user = Auth::user();
 		$votes = [];
+		$settings = Helper::getSettings();
+		$minsInformal = $minsSimple = $minsMileStone = 0;
+		if ($settings['time_unit_informal'] == 'min')
+			$minsInformal = (int) $settings['time_informal'];
+		else if ($settings['time_unit_informal'] == 'hour')
+			$minsInformal = (int) $settings['time_informal'] * 60;
+		else if ($settings['time_unit_informal'] == 'day')
+			$minsInformal = (int) $settings['time_informal'] * 60 * 24;
 
+		if ($settings['time_unit_simple'] == 'min')
+			$minsSimple = (int) $settings['time_simple'];
+		else if ($settings['time_unit_simple'] == 'hour')
+			$minsSimple = (int) $settings['time_simple'] * 60;
+		else if ($settings['time_unit_simple'] == 'day')
+			$minsSimple = (int) $settings['time_simple'] * 60 * 24;
+
+		if ($settings['time_unit_milestone'] == 'min')
+			$minsMileStone = (int) $settings['time_milestone'];
+		else if ($settings['time_unit_milestone'] == 'hour')
+			$minsMileStone = (int) $settings['time_milestone'] * 60;
+		else if ($settings['time_unit_milestone'] == 'day')
+			$minsMileStone = (int) $settings['time_milestone'] * 60 * 24;
 		// Variables
 		$sort_key = $sort_direction = $search = '';
 		$page_id = 0;
@@ -2426,7 +2551,11 @@ class SharedController extends Controller
 						'vote.*',
 						'vote_result.type as vote_result_type',
 						'vote_result.value as vote_result_value',
-						DB::raw('(CASE WHEN vote.content_type = \'grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros')
+						DB::raw('(CASE WHEN vote.content_type = \'grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
+						DB::raw("(CASE WHEN vote.content_type = 'grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsInformal MINUTE, current_timestamp())  
+							WHEN vote.content_type = 'milestone' THEN TIMEDIFF(vote.created_at + INTERVAL $minsMileStone MINUTE, current_timestamp())
+							WHEN vote.content_type = 'simple' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
+							ELSE null END ) AS timeLeft")
 					])
 					->orderBy($sort_key, $sort_direction)
 					->groupBy('vote.id')
@@ -2456,7 +2585,11 @@ class SharedController extends Controller
 						'users.last_name',
 						'users.id as user_id',
 						'vote.*',
-						DB::raw('(CASE WHEN vote.content_type = \'grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros')
+						DB::raw('(CASE WHEN vote.content_type = \'grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
+						DB::raw("(CASE WHEN vote.content_type = 'grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsInformal MINUTE, current_timestamp())  
+							WHEN vote.content_type = 'milestone' THEN TIMEDIFF(vote.created_at + INTERVAL $minsMileStone MINUTE, current_timestamp())
+							WHEN vote.content_type = 'simple' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
+							ELSE null END ) AS timeLeft")
 					])
 					->orderBy($sort_key, $sort_direction)
 					->offset($start)
@@ -2520,4 +2653,42 @@ class SharedController extends Controller
 		];
 	}
 
+	public function exportProposal(Request $request)
+	{
+		$search = $request->search;
+		$sort_key = $request->sort_key ?? 'proposal.id';
+		$sort_direction = $request->sort_direction ?? 'desc';
+		$proposals = Proposal::with(['votes', 'onboarding'])
+			->join('users', 'users.id', '=', 'proposal.user_id')
+			->join('profile', 'profile.user_id', '=', 'proposal.user_id')
+			->where(function ($query) use ($search) {
+				if ($search) {
+					$query->where('proposal.title', 'like', '%' . $search . '%')
+						->orWhere('proposal.member_reason', 'like', '%' . $search . '%')
+						->orWhere('proposal.status', 'like', '%' . $search . '%')
+						->orWhere('proposal.id', 'like', '%' . $search . '%')
+						->orWhere('proposal.short_description', 'like', '%' . $search . '%')
+						->orWhere('proposal.type', 'like', '%' . $search . '%');
+				}
+			})
+			->select([
+				'proposal.*',
+				'users.first_name',
+				'users.last_name',
+				'profile.forum_name',
+				'profile.telegram'
+			])
+			->orderBy($sort_key, $sort_direction)
+			->get();
+			return Excel::download(new ProposalExport($proposals), 'proposal.csv');
+	}
+
+	public function getTrackingProposal($proposalId)
+	{
+		$trackings = GrantTracking::where('proposal_id', $proposalId)->get();
+		return [
+			'success' => true,
+			'trackings' => $trackings
+		];
+	}
 }

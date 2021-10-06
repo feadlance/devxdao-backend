@@ -50,12 +50,12 @@ class ShuftiproCheck extends Command
     {
         $keys = [
             'production' => [
-              'clientId' => env('SHUFTIPRO_CLIENTID_PROD'),
-              'clientSecret' => env('SHUFTIPRO_CLIENTSECRET_PROD')
+              'clientId' => config('services.shuftipro.client_id_prod'),
+              'clientSecret' => config('services.shuftipro.client_secret_prod'),
             ],
             'test' => [
-              'clientId' => env('SHUFTIPRO_CLIENTID_TEST'),
-              'clientSecret' => env('SHUFTIPRO_CLIENTSECRET_TEST')
+              'clientId' => config('services.shuftipro.client_id_test'),
+              'clientSecret' => config('services.shuftipro.client_secret_test'),
             ]
         ];
 

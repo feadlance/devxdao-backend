@@ -6,6 +6,7 @@ use Laravel\Passport\HasApiTokens;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Traits\HasRoles;
 
 class User extends Authenticatable
@@ -55,5 +56,12 @@ class User extends Authenticatable
 
     public function shuftiproTemp() {
         return $this->hasOne('App\ShuftiproTemp', 'user_id');
+    }
+
+    public function ipHistories() {
+        return $this->hasMany('App\Models\IpHistory', 'user_id');
+    }
+    public function permissions() {
+        return $this->hasMany('Spatie\Permission\Models\Permission', 'user_id');
     }
 }

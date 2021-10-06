@@ -14,6 +14,7 @@ return [
     */
 
     'name' => env('APP_NAME', 'Laravel'),
+    'install_route_enabled' => env('INSTALL_ROUTE_ENABLED'),
 
     /*
     |--------------------------------------------------------------------------

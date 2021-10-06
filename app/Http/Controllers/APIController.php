@@ -18,7 +18,7 @@ use App\PreRegister;
 use App\Proposal;
 
 use App\Http\Helper;
-
+use App\IpHistory;
 use Laravel\Passport\Token;
 use Carbon\Carbon;
 
@@ -162,7 +162,7 @@ class APIController extends Controller
     $email = $request->get('email');
     $password = $request->get('password');
 
-    $user = User::with(['profile', 'shuftipro', 'shuftiproTemp'])
+    $user = User::with(['profile', 'shuftipro', 'shuftiproTemp', 'permissions'])
                 ->has('profile')
                 ->where('email', $email)
                 ->first();
@@ -176,6 +176,7 @@ class APIController extends Controller
     if (
     	(
     		$user->hasRole('admin') || 
+        $user->hasRole('super-admin') || 
     		$user->hasRole('member') || 
         $user->hasRole('participant') || 
         $user->hasRole('guest')
@@ -189,7 +190,7 @@ class APIController extends Controller
         ];
       }
 
-      if ($user->status == 'denied') {
+      if ($user->status == 'denied' || $user->banned == 1) {
         return [
           'success' => false,
           'message' => 'You are banned. Please contact us for further details.'
@@ -201,8 +202,17 @@ class APIController extends Controller
         'user_id' => $user->id,
         'name' => 'User Access Token'
       ])->delete();
+
+      $user->last_login_ip_address = request()->ip();
+      $user->last_login_at = now();
+      $user->save();
+      $ipHistory = new IpHistory();
+      $ipHistory->user_id = $user->id;
+      $ipHistory->ip_address = request()->ip();
+      $ipHistory->save();
+
       $tokenResult = $user->createToken('User Access Token');
-      	
+      
       $user->accessTokenAPI = $tokenResult->accessToken;
 
       // Two FA Setting Check & Code Generate
@@ -221,6 +231,8 @@ class APIController extends Controller
       
       // Membership Proposal
       $user->membership = Helper::getMembershipProposal($user);
+       //check active survey
+       $user->has_survey = Helper::checkActiveSurvey($user);
 
       return [
         'success' => true,
@@ -410,6 +422,15 @@ class APIController extends Controller
       'user_id' => $user->id,
       'name' => 'User Access Token'
     ])->delete();
+
+    $user->last_login_ip_address = request()->ip();
+    $user->last_login_at = now();
+    $user->save();
+    $ipHistory = new IpHistory();
+    $ipHistory->user_id = $user->id;
+    $ipHistory->ip_address = request()->ip();
+    $ipHistory->save();
+    
     $tokenResult = $user->createToken('User Access Token');
 
     $user->accessTokenAPI = $tokenResult->accessToken;
@@ -523,7 +544,7 @@ class APIController extends Controller
 
     if ($user) {
       $userId = (int) $user->id;
-      $user = User::with(['profile', 'shuftipro', 'shuftiproTemp'])
+      $user = User::with(['profile', 'shuftipro', 'shuftiproTemp', 'permissions'])
                   ->where('id', $userId)
                   ->first();
 
@@ -535,6 +556,9 @@ class APIController extends Controller
       
       // check grant active
       $user->grant_active = Helper::checkPendingFinalGrant($user);
+
+      //check active survey
+      $user->has_survey = Helper::checkActiveSurvey($user);
       return [
         'success' => true,
         'me' => $user
@@ -575,5 +599,59 @@ class APIController extends Controller
     }
 
     return ['success' => true];
+  }
+
+  public function registerAdmin(Request $request)
+  {
+    // Validator
+    $validator = Validator::make($request->all(), [
+      'email' => 'required|email',
+      'password' => 'required|min:7',
+      'first_name' => 'required',
+      'last_name' => 'required',
+      'code' => 'required'
+    ]);
+
+    if ($validator->fails()) {
+      return [
+        'success' => false,
+        'message' => 'Provide all the necessary information'
+      ];
+    }
+    $user = User::with(['profile', 'permissions'])->where('email', $request->email)->where('admin_status', 'invited')->where('confirmation_code', $request->code)->first();
+    if (!$user) {
+      return [
+        'success' => false,
+        'message' => 'There is no admin user with this email'
+      ];
+    }
+    $user->first_name = $request->first_name;
+    $user->last_name = $request->last_name;
+    $user->password = bcrypt($request->password);
+    $user->admin_status = 'active';
+    $user->status = 'approved';
+    $user->last_login_at = now();
+    $user->email_verified_at = now();
+    $user->can_access = 1;
+    $user->email_verified = 1;
+    $user->last_login_ip_address = request()->ip();
+    $user->save();
+    $ipHistory = new IpHistory();
+    $ipHistory->user_id = $user->id;
+    $ipHistory->ip_address = request()->ip();
+    $ipHistory->save();
+    // Generate token and return
+    Token::where([
+      'user_id' => $user->id,
+      'name' => 'User Access Token'
+    ])->delete();
+    $tokenResult = $user->createToken('User Access Token');
+
+    $user->accessTokenAPI = $tokenResult->accessToken;
+
+    return [
+      'success' => true,
+      'user' => $user
+    ];
   }
 }

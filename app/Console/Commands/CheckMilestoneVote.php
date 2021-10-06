@@ -59,7 +59,8 @@ class CheckMilestoneVote extends Command
         if ($start->lt($today) || $force) {
             $proposal = Proposal::find((int) $vote->proposal_id);
             if (!$proposal) return;
-
+            $milestone = Milestone::find($vote->milestone_id);
+            if (!$milestone) return;
             $op = User::find($proposal->user_id);
             if (!$op) return;
 
@@ -70,7 +71,7 @@ class CheckMilestoneVote extends Command
                 $vote->status = 'completed';
                 $vote->result = 'no-quorum';
                 $vote->save();
-
+                Helper::createMilestoneLog($vote->milestone_id, null, null, 'System', 'Vote failed to get quorum');
                 // Emailer
                 Helper::triggerAdminEmail('Vote Complete with No Quorum', $emailerData, $proposal, $vote);
                 Helper::triggerUserEmail($op, 'Vote Recieved No Quorum', $emailerData, $proposal, $vote);
@@ -84,8 +85,12 @@ class CheckMilestoneVote extends Command
 
                 // Emailer
                 if ($result == "success") {
+                    Helper::createMilestoneLog($vote->milestone_id, null, null, 'System', 'Vote passed');
+                    $milestonePosition = Helper::getPositionMilestone($milestone);
+					Helper::createGrantTracking($milestone->proposal_id, "Milestone $milestonePosition passed informal vote", "milestone_" . $milestonePosition ."_passed_informal_vote");
                     Helper::triggerUserEmail($op, 'Milestone Vote Passed Informal', $emailerData, $proposal, $vote);
                 } else if ($result == "fail") {
+                    Helper::createMilestoneLog($vote->milestone_id, null, null, 'System', 'Vote failed');
                     Helper::triggerUserEmail($op, 'Milestone Vote Failed', $emailerData, $proposal, $vote);
                 }
             }
@@ -107,7 +112,8 @@ class CheckMilestoneVote extends Command
             $op = User::find($proposal->user_id);
 
             if (!$proposal || !$op) return;
-
+            $milestone = Milestone::find($vote->milestone_id);
+            if (!$milestone) return;
             $emailerData = Helper::getEmailerData();
             
             if ($vote->result_count < $minMembers) {
@@ -115,7 +121,7 @@ class CheckMilestoneVote extends Command
                 $vote->status = 'completed';
                 $vote->result = 'no-quorum';
                 $vote->save();
-
+                Helper::createMilestoneLog($vote->milestone_id, null, null, 'System', 'Vote failed to get quorum');
                 // Emailer
                 Helper::triggerAdminEmail('Vote Complete with No Quorum', $emailerData, $proposal, $vote);
                 Helper::triggerUserEmail($op, 'Vote Recieved No Quorum', $emailerData, $proposal, $vote);
@@ -129,11 +135,14 @@ class CheckMilestoneVote extends Command
 
                 if ($result == "success") {
                     Helper::triggerUserEmail($op, 'Milestone Vote Passed Formal', $emailerData, $proposal, $vote);
+                    $milestonePosition = Helper::getPositionMilestone($milestone);
+					Helper::createGrantTracking($proposal->id, "Milestone $milestonePosition passed formal vote",  "milestone_" . $milestonePosition ."_passed_formal_vote");
                     Helper::runWinnerFlow($proposal, $vote, $settings);
 
                     $finalGrant = FinalGrant::where('proposal_id', $proposal->id)
                                             ->where('status', 'active')
                                             ->first();
+                    Helper::createMilestoneLog($vote->milestone_id, null, null, 'System', 'Vote passed');
                     if ($finalGrant) {
                         $finalGrant->milestones_complete = (int) $finalGrant->milestones_complete + 1;
                         if (
@@ -142,15 +151,16 @@ class CheckMilestoneVote extends Command
                             Helper::triggerUserEmail($op, 'All Milestones Complete', $emailerData, $proposal, $vote);
 
                             $finalGrant->status = "completed";
-                            
-                            if ($op->hasRole('member'))
-                                Helper::completeProposal($proposal);
-                            else
-                                Helper::sendMembershipHellosign($op, $proposal, $settings);
+                            Helper::completeProposal($proposal);
+                            // if ($op->hasRole('member'))
+                            //     Helper::completeProposal($proposal);
+                            // else
+                            //     Helper::sendMembershipHellosign($op, $proposal, $settings);
                         }
                         $finalGrant->save();
                     }
                 } else {
+                    Helper::createMilestoneLog($vote->milestone_id, null, null, 'System', 'Vote failed');
                     Helper::triggerUserEmail($op, 'Milestone Vote Failed', $emailerData, $proposal, $vote);
                     Helper::runLoserFlow($proposal, $vote, $settings);
                 }

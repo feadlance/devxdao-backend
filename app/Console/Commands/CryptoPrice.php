@@ -66,7 +66,7 @@ class CryptoPrice extends Command
         try {
             //
             $response = Http::withHeaders([
-              'X-CMC_PRO_API_KEY' => env('X_CMC_PRO_API_KEY')
+              'X-CMC_PRO_API_KEY' => config('services.x_cmc_pro.api_key')
             ])->get($url, [
               'amount' => 1,
               'symbol' => 'ETH',
@@ -80,7 +80,7 @@ class CryptoPrice extends Command
             
             //
             $response = Http::withHeaders([
-              'X-CMC_PRO_API_KEY' => env('X_CMC_PRO_API_KEY')
+              'X-CMC_PRO_API_KEY' => config('services.x_cmc_pro.api_key')
             ])->get($url, [
               'amount' => 1,
               'symbol' => 'BTC',

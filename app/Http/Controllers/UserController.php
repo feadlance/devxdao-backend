@@ -25,6 +25,7 @@ use App\Bank;
 use App\Crypto;
 use App\Grant;
 use App\Citation;
+use App\Exports\MyReputationExport;
 use App\Milestone;
 use App\FinalGrant;
 use App\Team;
@@ -44,6 +45,13 @@ use App\Mail\HelpRequest;
 use PDF;
 
 use App\Jobs\Test;
+use App\MilestoneReview;
+use App\ProposalDraft;
+use App\ProposalDraftFile;
+use App\Survey;
+use App\SurveyResult;
+use Carbon\Carbon;
+use Maatwebsite\Excel\Facades\Excel;
 
 class UserController extends Controller
 {
@@ -685,7 +693,8 @@ class UserController extends Controller
 	// Stake CC
 	public function stakeCC($proposalId, Request $request) {
 		$user = Auth::user();
-
+		$setting = Helper::getSettings();
+		$dos_fee_amount = $setting['dos_fee_amount'] ?? 0;
 		if ($user) {
 			// Profile Check
 			$profile = Profile::where('user_id', $user->id)->first();
@@ -708,6 +717,8 @@ class UserController extends Controller
 			// Activates the Proposal ( Admin doesn't need to manually approve the payment by reputation )
 			$proposal->dos_paid = 1;
 			$proposal->status = 'approved';
+			$proposal->dos_amount = $dos_fee_amount;
+			$proposal->dos_cc_amount = $dos_fee_amount;
 			$proposal->save();
 
 			// Update Timestamp
@@ -717,6 +728,7 @@ class UserController extends Controller
 			// Emailer Member
 	    $emailerData = Helper::getEmailerData();
 	    Helper::triggerMemberEmail('New Proposal Discussion', $emailerData, $proposal);
+		Helper::createGrantTracking($proposalId, "Entered discussion phase", 'discussion_phase');
 
 			return ['success' => true];
 		}
@@ -727,7 +739,7 @@ class UserController extends Controller
 	// Stake Reputation
 	public function stakeReputation($proposalId, Request $request) {
 		$user = Auth::user();
-
+		$dos_fee_amount = $setting['dos_fee_amount'] ?? 0;
 		if ($user && $user->hasRole('member')) {
 			// Member Check
 			$profile = Profile::where('user_id', $user->id)->first();
@@ -743,9 +755,9 @@ class UserController extends Controller
 			$rep = round($rep, 2);
 
 			$max = (float) $profile->rep / 2;
-			$max = round($max, 2);
+			// $max = round($max, 2);
 
-			if ($rep < 1 || $rep > $max) {
+			if ($rep > $max) {
 				return [
 					'success' => false,
 					'message' => 'Invalid reputation amount'
@@ -763,6 +775,7 @@ class UserController extends Controller
 
 			$profile->rep = (float) $profile->rep - $rep;
 			$profile->save();
+			Helper::createRepHistory($profile->user_id, - $rep, $profile->rep, 'Staked', 'Proposal Payment', $proposal->id, null, 'stakeReputation');
 
 			// Activates the Proposal ( Admin doesn't need to manually approve the payment by reputation )
 			$proposal->rep = $rep;
@@ -772,6 +785,7 @@ class UserController extends Controller
 
 			// Update Timestamp
 			$proposal->approved_at = $proposal->updated_at;
+			$proposal->dos_amount = $dos_fee_amount;
 			$proposal->save();
 
 			// Save Reputation Track
@@ -795,6 +809,7 @@ class UserController extends Controller
 			// Emailer Member
             $emailerData = Helper::getEmailerData();
             Helper::triggerMemberEmail('New Proposal Discussion', $emailerData, $proposal);
+			Helper::createGrantTracking($proposalId, "Entered discussion phase", 'discussion_phase');
 
 			return ['success' => true];
 		}
@@ -886,7 +901,9 @@ class UserController extends Controller
 		ini_set('display_errors', 1);
 		error_reporting(E_ALL);
 
-		$stripe = new \Stripe\StripeClient(env('STRIPE_SK_LIVE'));
+		$stripe = new \Stripe\StripeClient(
+			config('services.stripe.sk_live')
+		);
 		$paymentIntent = $stripe->paymentIntents->create([
 		  'amount' => 100,
 		  'currency' => 'eur',
@@ -896,6 +913,11 @@ class UserController extends Controller
 
 	// Create Payment Intent
 	public function createPaymentIntent(Request $request) {
+		/*
+		config('services.stripe.sk_live')
+		config('services.stripe.sk_test')
+		*/
+
 		$user = Auth::user();
 		$amount = (float) $request->get('amount');
 
@@ -906,7 +928,9 @@ class UserController extends Controller
 		) {
 			$amount = (int) (100 * $amount);
 
-			$stripe = new \Stripe\StripeClient(env('STRIPE_SK_LIVE'));
+			$stripe = new \Stripe\StripeClient(
+				config('services.stripe.sk_live')
+			);
 
 			try {
 				$paymentIntent = $stripe->paymentIntents->create([
@@ -934,6 +958,22 @@ class UserController extends Controller
 					'message' => $e->getMessage()
 				];
 			}
+
+			/*
+			\Stripe\Stripe::setApiKey(config('services.stripe.sk_test'));
+
+			$paymentIntent = \Stripe\PaymentIntent::create([
+				'amount' => $amount,
+				'currency' => 'eur',
+		  ]);
+
+		  $secret = $paymentIntent->client_secret;
+
+		  return [
+		  	'success' => true,
+		  	'secret' => $secret,
+		  ];
+		  */
 		}
 
 		return ['success' => false];
@@ -942,7 +982,7 @@ class UserController extends Controller
 	// Update Payment Proposal - ETH
 	public function updatePaymentProposal($proposalId, Request $request) {
 		$user = Auth::user();
-
+		$dos_fee_amount = $setting['dos_fee_amount'] ?? 0;
 		if ($user && $user->hasRole(['participant', 'member'])) {
 			$dos_txid = $request->get('dos_txid');
 			$dos_eth_amount = (float) $request->get('dos_eth_amount');
@@ -982,6 +1022,7 @@ class UserController extends Controller
 			$proposal->dos_paid = 1;
 			$proposal->dos_txid = $dos_txid;
 			$proposal->dos_eth_amount = $dos_eth_amount;
+			$proposal->dos_amount = $dos_fee_amount;
 			$proposal->rep = 0;
 			$proposal->save();
 
@@ -1254,7 +1295,7 @@ class UserController extends Controller
 	    $proposalId = (int) $request->get('proposalId');
 	    $voteId = (int) $request->get('voteId');
 	    $type = $request->get('type');
-	    $value = (int) $request->get('value');
+	    $value = (float) $request->get('value');
 
 	    // Vote Check
 	    $vote = Vote::find($voteId);
@@ -1329,6 +1370,7 @@ class UserController extends Controller
 	    if ($vote->type == "formal") {
 		    $profile->rep = (float) $profile->rep - $value;
 		    $profile->save();
+			Helper::createRepHistory($profile->user_id, - $value, $profile->rep, 'Staked', 'Proposal Vote', $proposalId, $voteResult->id, 'submitVote');
 
 		    // Create Reputation Track
 		    if ($value != 0) {
@@ -1345,9 +1387,9 @@ class UserController extends Controller
 
 	    // Update Vote
 	    if ($type == 'for')
-	    	$vote->for_value = (int) $vote->for_value + $value;
+	    	$vote->for_value = (float) $vote->for_value + $value;
 	    else
-	    	$vote->against_value = (int) $vote->against_value + $value;
+	    	$vote->against_value = (float) $vote->against_value + $value;
 	    $vote->result_count = (int) $vote->result_count + 1;
 	    $vote->save();
 
@@ -1629,131 +1671,182 @@ class UserController extends Controller
 	}
 
 	// Submit Milestone
-	public function submitMilestone(Request $request) {
+	public function submitMilestone(Request $request)
+	{
 		$user = Auth::user();
 
 		if ($user && $user->hasRole(['participant', 'member'])) {
 			// Validator
-	    $validator = Validator::make($request->all(), [
-	      'proposalId' => 'required',
-	      'milestoneId' => 'required',
-	      'url' => 'required',
-	      'comment' => 'required'
-	    ]);
-	    if ($validator->fails()) {
-	    	return [
-	    		'success' => false,
-	    		'message' => 'Provide all the necessary information'
-	    	];
-	    }
+			$validator = Validator::make($request->all(), [
+				'proposalId' => 'required',
+				'milestoneId' => 'required',
+				'url' => 'required',
+				'comment' => 'required',
+				'attest_accepted_definition' => 'required|in:1',
+				'attest_accepted_pm' => 'required|in:0,1',
+				'attest_submitted_accounting' => 'required|in:1',
+				'attest_work_adheres' => 'required|in:1',
+				'attest_submitted_corprus' => 'required|in:1',
+				'attest_accept_crdao' => 'required|in:1',
+			]);
+			if ($validator->fails()) {
+				return [
+					'success' => false,
+					'message' => 'Provide all the necessary information'
+				];
+			}
 
-	    $proposalId = (int) $request->get('proposalId');
-	    $milestoneId = (int) $request->get('milestoneId');
-	    $url = $request->get('url');
-	    $comment = $request->get('comment');
+			$proposalId = (int) $request->get('proposalId');
+			$milestoneId = (int) $request->get('milestoneId');
+			$url = $request->get('url');
+			$comment = $request->get('comment');
 
-	    $finalGrant = FinalGrant::where('proposal_id', $proposalId)->first();
-	    $milestone = Milestone::find($milestoneId);
+			$finalGrant = FinalGrant::where('proposal_id', $proposalId)->first();
+			$milestone = Milestone::find($milestoneId);
 
-	    if (!$finalGrant || !$milestone) {
-	    	return [
-	    		'success' => false,
-	    		'message' => 'Invalid grant',
-	    	];
-	    }
-
-	    $vote = Vote::where('proposal_id', $proposalId)
-	    						->where('type', 'informal')
-	    						->where('content_type', 'milestone')
-	    						->where('milestone_id', $milestoneId)
-	    						->first();
-
-	    if (!$vote) {
-	    	// Submit
-	    	$vote = new Vote;
-	    	$vote->proposal_id = $proposalId;
-	    	$vote->type = "informal";
-	    	$vote->status = "active";
-	    	$vote->content_type = "milestone";
-	    	$vote->milestone_id = $milestoneId;
-	    	$vote->save();
-
-	    	$finalGrant->milestones_submitted = (int) $finalGrant->milestones_submitted + 1;
-	    	$finalGrant->save();
-
-	    	$milestone->url = $url;
-	    	$milestone->comment = $comment;
-	    	$milestone->save();
-
-	    	$emailerData = Helper::getEmailerData();
-	    	Helper::triggerUserEmail($user, 'Milestone Submitted', $emailerData);
-
-	    	return ['success' => true];
-	    } else {
-	    	// Re-Submit
-	    	$finalVote = Vote::where('proposal_id', $proposalId)
-					    						->where('type', 'formal')
-					    						->where('content_type', 'milestone')
-					    						->where('milestone_id', $milestoneId)
-					    						->orderBy('id', 'desc')
-					    						->first();
-
-				if ($finalVote && $finalVote->result == "fail") {
-					// Submit
-		    	$vote = new Vote;
-		    	$vote->proposal_id = $proposalId;
-		    	$vote->type = "informal";
-		    	$vote->status = "active";
-		    	$vote->content_type = "milestone";
-		    	$vote->milestone_id = $milestoneId;
-		    	$vote->save();
-
-		    	$milestone->url = $url;
-		    	$milestone->comment = $comment;
-		    	$milestone->save();
-
-		    	return ['success' => true];
+			if (
+				!$finalGrant || !$milestone
+			) {
+				return [
+					'success' => false,
+					'message' => 'Invalid grant',
+				];
+			}
+			$milestone->url = $url;
+			$milestone->comment = $comment;
+			$milestone->submitted_time = now();
+			$milestone->attest_accepted_definition = $request->attest_accepted_definition;
+			$milestone->attest_accepted_pm = $request->attest_accepted_pm;
+			$milestone->attest_submitted_accounting = $request->attest_submitted_accounting;
+			$milestone->attest_work_adheres = $request->attest_work_adheres;
+			$milestone->attest_submitted_corprus = $request->attest_submitted_corprus;
+			$milestone->attest_accept_crdao = $request->attest_accept_crdao;
+			$milestone->save();
+			$position = Helper::getPositionMilestone($milestone);
+			Helper::createGrantTracking($proposalId, "Milestone $position submitted", 'milestone_' .$position.'_submitted');
+			$setting = Helper::getSettings();
+			if ($setting['gate_new_milestone_votes'] == 'yes') {
+				$milestoneReview = MilestoneReview::where('milestone_id', $milestoneId)->first();
+				if ($milestoneReview && $milestoneReview->status != 'denied') {
+					return [
+						'success' => false,
+						'message' => "Cannot submit milestone because it's waiting for review!",
+					];
 				}
-	    }
+				Helper::createMilestoneLog($milestoneId, $user->email, $user->id, 'OP', 'User submitted the work for review.');
+				$milestone->time_submit = $milestone->time_submit +1;
+				$milestone->save();
+				Helper::createMilestoneSubmitHistory($milestone, $user->id);
+				$statusReview = 'active';
+				if(!$milestoneReview) {
+					$milestoneReview = new MilestoneReview();
+					$statusReview = 'pending';
+				}
+				$milestoneReview->milestone_id = $milestoneId;
+				$milestoneReview->proposal_id = $proposalId;
+				$milestoneReview->status = $statusReview;
+				$milestoneReview->save();
+				return ['success' => true];
+			} else {
+				Helper::createMilestoneLog($milestoneId, $user->email, $user->id, 'OP', 'User submitted the work for review.');
+				$milestone->time_submit = $milestone->time_submit + 1;
+				$milestone->save();
+				Helper::createMilestoneSubmitHistory($milestone, $user->id);
+				$vote = Vote::where('proposal_id', $proposalId)
+					->where(
+						'type',
+						'informal'
+					)
+					->where('content_type', 'milestone')
+					->where('milestone_id', $milestoneId)
+					->first();
+
+				if (!$vote) {
+					Helper::createMilestoneLog($milestoneId, null, null, 'System', 'Vote started');
+					$milestonePosition = Helper::getPositionMilestone($milestone);
+					Helper::createGrantTracking($milestone->proposal_id, "Milestone $milestonePosition started informal vote", 'milestone_' . $milestonePosition . '_started_informal_vote');
+					// Submit
+					$vote = new Vote;
+					$vote->proposal_id = $proposalId;
+					$vote->type = "informal";
+					$vote->status = "active";
+					$vote->content_type = "milestone";
+					$vote->milestone_id = $milestoneId;
+					$vote->save();
+
+					$finalGrant->milestones_submitted = (int) $finalGrant->milestones_submitted + 1;
+					$finalGrant->save();
+
+
+
+					$emailerData = Helper::getEmailerData();
+					Helper::triggerUserEmail($user, 'Milestone Submitted', $emailerData);
+
+					return ['success' => true];
+				} else {
+					// Re-Submit
+					$finalVote = Vote::where('proposal_id', $proposalId)
+						->where('type', 'formal')
+						->where('content_type', 'milestone')
+						->where('milestone_id', $milestoneId)
+						->orderBy('id', 'desc')
+						->first();
+
+					if ($finalVote && $finalVote->result == "fail") {
+						Helper::createMilestoneLog($milestoneId, null, null, 'System', 'Vote re-started');
+						// Submit
+						$vote = new Vote;
+						$vote->proposal_id = $proposalId;
+						$vote->type = "informal";
+						$vote->status = "active";
+						$vote->content_type = "milestone";
+						$vote->milestone_id = $milestoneId;
+						$vote->save();
+
+						return ['success' => true];
+					}
+				}
+			}
 		}
 
 		return ['success' => false];
 	}
 
 	// Submit Proposal
-	public function submitProposal(Request $request) {
+	public function submitProposal(Request $request)
+	{
 		$user = Auth::user();
 
 		if ($user && $user->hasRole(['participant', 'member'])) {
 			// Validator
-	    $validator = Validator::make($request->all(), [
-	      'title' => 'required',
-	      'short_description' => 'required',
-	      'explanation_benefit' => 'required',
-	      //'explanation_goal' => 'required',
-	      'total_grant' => 'required',
-	      'resume' => 'required',
-	    //   'extra_notes' => 'required',
-	      // 'citations' => 'required|array',
-	      // 'members' => 'required|array',
-	      'grants' => 'required|array',
-	      'milestones' => 'required|array',
-	      'relationship' => 'required'
-	      // 'previous_work' => 'required',
-	      // 'other_work' => 'required',
-	    //   'formField1' => 'required',
-	    //   'formField2' => 'required',
-	    //   'purpose' => 'required'
-	    ]);
-	    if ($validator->fails()) {
-	    	return [
-	    		'success' => false,
-	    		'message' => 'Provide all the necessary information'
-	    	];
-	    }
+			$validator = Validator::make($request->all(), [
+				'title' => 'required',
+				'short_description' => 'required',
+				'explanation_benefit' => 'required',
+				//'explanation_goal' => 'required',
+				'total_grant' => 'required',
+				'resume' => 'required',
+				//   'extra_notes' => 'required',
+				// 'citations' => 'required|array',
+				// 'members' => 'required|array',
+				'grants' => 'required|array',
+				'milestones' => 'required|array',
+				'relationship' => 'required'
+				// 'previous_work' => 'required',
+				// 'other_work' => 'required',
+				//   'formField1' => 'required',
+				//   'formField2' => 'required',
+				//   'purpose' => 'required'
+			]);
+			if ($validator->fails()) {
+				return [
+					'success' => false,
+					'message' => 'Provide all the necessary information'
+				];
+			}
 
-	    $include_membership = (int) $request->get('include_membership');
-	    $member_reason = $request->get('member_reason');
+			$include_membership = (int) $request->get('include_membership');
+			$member_reason = $request->get('member_reason');
 			$member_benefit = $request->get('member_benefit');
 			$linkedin = $request->get('linkedin');
 			$github = $request->get('github');
@@ -1761,9 +1854,9 @@ class UserController extends Controller
 			if ($include_membership) {
 				if (!$member_reason || !$member_benefit) {
 					return [
-		    		'success' => false,
-		    		'message' => 'Provide all the necessary information'
-		    	];
+						'success' => false,
+						'message' => 'Provide all the necessary information'
+					];
 				}
 			}
 
@@ -1828,11 +1921,12 @@ class UserController extends Controller
 
 			$memberRequired = (int) $request->get('memberRequired');
 
-			if ($memberRequired && (!$members || !count($members))) {
+			if ($memberRequired && (!$members || !count($members))
+			) {
 				return [
-	    		'success' => false,
-	    		'message' => 'Provide all the necessary information'
-	    	];
+					'success' => false,
+					'message' => 'Provide all the necessary information'
+				];
 			}
 
 			$proposal = Proposal::where('title', $title)->first();
@@ -1844,7 +1938,7 @@ class UserController extends Controller
 			}
 
 			$codeObject = null;
-
+			ProposalDraft::where('user_id', $user->id)->where('title', $title)->delete();
 			// Creating Proposal
 			$proposal = new Proposal;
 			$proposal->title = $title;
@@ -1922,17 +2016,11 @@ class UserController extends Controller
 			// $proposal->purposeOther = $purposeOther;
 
 			if ($tags && count($tags))
-				$proposal->tags = implode(",", $tags);
+			$proposal->tags = implode(",", $tags);
 
 			$proposal->member_required = $memberRequired;
 			$proposal->save();
 
-			$pdf = PDF::loadView('proposal_pdf', compact('proposal'));
-			$fullpath = 'pdf/proposal/proposal_'.$proposal->id.'.pdf';
-			Storage::disk('local')->put($fullpath,$pdf->output());
-			$url = Storage::disk('local')->url($fullpath);
-			$proposal->pdf = $url;
-			$proposal->save();
 
 			if ($codeObject) {
 				$codeObject->used = 1;
@@ -1948,7 +2036,7 @@ class UserController extends Controller
 
 					if (
 						$full_name &&
-						$bio 
+						$bio
 					) {
 						$team = new Team;
 						$team->full_name = $full_name;
@@ -1990,7 +2078,7 @@ class UserController extends Controller
 			$bank = new Bank;
 			$bank->proposal_id = (int) $proposal->id;
 			if ($bank_name)
-				$bank->bank_name = $bank_name;
+			$bank->bank_name = $bank_name;
 			if ($iban_number)
 				$bank->iban_number = $iban_number;
 			if ($swift_number)
@@ -2002,9 +2090,9 @@ class UserController extends Controller
 			if ($bank_address)
 				$bank->bank_address = $bank_address;
 			if ($bank_city)
-				$bank->bank_city = $bank_city;
+			$bank->bank_city = $bank_city;
 			if ($bank_zip)
-				$bank->bank_zip = $bank_zip;
+			$bank->bank_zip = $bank_zip;
 			if ($bank_country)
 				$bank->bank_country = $bank_country;
 			if ($holder_address)
@@ -2033,7 +2121,8 @@ class UserController extends Controller
 				extract($milestoneData);
 				$grant = (float) $grant;
 
-				if ($grant && $title && $details) {
+				if ($grant && $title && $details
+				) {
 					$milestone = new Milestone;
 					$milestone->proposal_id = (int) $proposal->id;
 					$milestone->title = $title;
@@ -2070,16 +2159,35 @@ class UserController extends Controller
 					}
 				}
 			}
-		// save user
-		$user->press_dismiss = 1;
-		$user->save();
-		
+			$pdf = PDF::loadView('proposal_pdf', compact('proposal'));
+			$fullpath = 'pdf/proposal/proposal_' . $proposal->id . '.pdf';
+			Storage::disk('local')->put($fullpath, $pdf->output());
+			$url = Storage::disk('local')->url($fullpath);
+			$proposal->pdf = $url;
+			$proposal->save();
+			// save user
+			$user->press_dismiss = 1;
+			$user->save();
+			// save file 
+			$proposal_draft_id = $request->get('proposal_draft_id');
+			if($proposal_draft_id) {
+				$proposal_draft_files = ProposalDraftFile::where('proposal_draft_id', $proposal_draft_id)->get();
+				foreach($proposal_draft_files as $file) {
+					$proposalFile = new ProposalFile;
+					$proposalFile->proposal_id = $proposal->id;
+					$proposalFile->name = $file->name;
+					$proposalFile->path = $file->path;
+					$proposalFile->url = $file->url;
+					$proposalFile->save();
+				}
+			}
 			// Emailer
-	    $emailerData = Helper::getEmailerData();
-	    Helper::triggerAdminEmail('New Proposal', $emailerData);
-	    Helper::triggerUserEmail($user, 'New Proposal', $emailerData);
+			$emailerData = Helper::getEmailerData();
+			Helper::triggerAdminEmail('New Proposal', $emailerData);
+			Helper::triggerUserEmail($user, 'New Proposal', $emailerData);
 
-	    return [
+			Helper::createGrantTracking($proposal->id, "Proposal $proposal->id submitted", 'proposal_submitted');
+			return [
 				'success' => true,
 				'proposal' => $proposal
 			];
@@ -2127,6 +2235,7 @@ class UserController extends Controller
 
 			$proposal = Proposal::find($proposalId);
 			$informalVote = Vote::find($voteId);
+			$milestone = Milestone::find($informalVote->milestone_id);
 
 			// Proposal Check
 			if (!$proposal || $proposal->user_id != $user->id) {
@@ -2158,7 +2267,9 @@ class UserController extends Controller
 
 			$informalVote->formal_vote_id = $vote->id;
 			$informalVote->save();
-
+			Helper::createMilestoneLog($informalVote->milestone_id, null, null, 'System', 'Vote started');
+			$milestonePosition = Helper::getPositionMilestone($milestone);
+			Helper::createGrantTracking($proposal->id, "Milestone $milestonePosition stared formal vote", 'milestone_' . $milestonePosition .'_started_formal_vote');
 			// Emailer Admin
 			$emailerData = Helper::getEmailerData();
 			Helper::triggerAdminEmail('Vote Started', $emailerData, $proposal, $vote);
@@ -2171,4 +2282,482 @@ class UserController extends Controller
 
 		return ['success' => false];
 	}
+
+	public function checkFirstCompletedProposal() {
+		$user = Auth::user();
+		$user->check_first_compeleted_proposal = 0;
+		$user->save();
+		return ['success' => true];
+	}
+
+	public function submitDraftProposal(Request $request)
+	{
+		$user = Auth::user();
+		if ($user && $user->hasRole(['participant', 'member'])) {
+			$title = $request->title;
+			if (!$title) {
+				return [
+					'success' => false,
+					'message' => 'Title must be has value'
+				];
+			}
+			$user_id = $user->id;
+			$proposal_draft =  ProposalDraft::updateOrCreate([
+				'title' => $request->title,
+				'user_id' => $user_id,
+			], [
+				'short_description'  => $request->short_description,
+				'explanation_benefit'=> $request->explanation_benefit,
+				'license'=> $request->license,
+				'license_other'  => $request->license_other,
+				'total_grant'=> $request->total_grant,
+				'member_required'=> $request->member_required,
+				'members'=> $request->members ? json_encode( $request->members ) : null,
+				'grants' => $request->grants ? json_encode($request->grants) : null,
+				'bank_name'  => $request->bank_name,
+				'iban_number'=> $request->iban_number,
+				'swift_number' => $request->swift_number,
+				'holder_name'=> $request->holder_name,
+				'account_number' => $request->account_number,
+				'bank_address' => $request->bank_address,
+				'bank_city'  => $request->bank_city,
+				'bank_country'     => $request->bank_country,
+				'holder_country' => $request->holder_country,
+				'holder_zip' => $request->holder_zip,
+				'crypto_type'=> $request->crypto_type,
+				'crypto_address' => $request->crypto_address,
+				'milestones' => $request->milestones ? json_encode($request->milestones) : null,
+				'citations'  => $request->citations ? json_encode($request->citations) : null,
+				'relationship' => $request->relationship,
+				'received_grant_before'  => $request->received_grant_before,
+				'grant_id' => $request->grant_id,
+				'has_fulfilled' => $request->has_fulfilled,
+				'previous_work' => $request->previous_work,
+				'other_work' => $request->other_work,
+				'include_membership' => $request->include_membership,
+				'member_reason'  => $request->member_reason,
+				'member_benefit' => $request->member_benefit,
+				'linkedin' => $request->linkedin,
+				'github' => $request->github,
+				'sponsor_code_id'=> $request->sponsor_code_id,
+				'name_entity'=> $request->name_entity,
+				'entity_country' => $request->entity_country,
+				'have_mentor'=> $request->have_mentor,
+				'name_mentor'=> $request->name_mentor,
+				'total_hours_mentor' => $request->total_hours_mentor,
+				'agree1' => $request->agree1,
+				'agree2' => $request->agree2,
+				'agree3' => $request->agree3,
+				'tags'   => $request->tags ? json_encode($request->tags) : null	,
+				'resume' => $request->resume,
+				'extra_notes'=> $request->extra_notes,
+				'is_company_or_organization'=> $request->is_company_or_organization,
+			]);
+			return [
+				'success' => true,
+				'proposal_draft' => $proposal_draft,
+			];
+		}
+		return ['success' => false];
+	}
+
+	public function getDraftProposal(Request $request)
+	{
+		$user = Auth::user();
+		// Variables
+		$sort_key = $sort_direction = '';
+		$page_id = 0;
+		$data = $request->all();
+		if ($data && is_array($data)) extract($data);
+
+		if (!$sort_key) $sort_key = 'proposal_draft.updated_at';
+		if (!$sort_direction) $sort_direction = 'desc';
+		$page_id = (int) $page_id;
+		if ($page_id <= 0) $page_id = 1;
+
+		$limit = 30;
+		$start = $limit * ($page_id - 1);
+
+		// Records
+		$proposals = ProposalDraft::where('user_id', $user->id)
+			->orderBy($sort_key, $sort_direction)
+			->offset($start)
+			->limit($limit)
+			->get();
+		return [
+			'success' => true,
+			'proposals' => $proposals,
+			'finished' => count($proposals) < $limit ? true : false
+		];
+	}
+
+	public function getDraftProposalDetail($id)
+	{
+		$user = Auth::user();
+		$proposal = ProposalDraft::with(['files'])->where('user_id', $user->id)->where('id', $id)->first();
+		if ($proposal) {
+			return [
+				'success' => true,
+				'proposal' => $proposal,
+			];
+		}
+		return [
+			'success' => false,
+			'message' => 'Proposal draft not found'
+		];
+	}
+
+	public function deleteDraftProposal($id)
+	{
+		$user = Auth::user();
+		$proposal = ProposalDraft::where('user_id', $user->id)->where('id', $id)->first();
+		if ($proposal) {
+			$proposal->delete();
+			return [
+				'success' => true,
+			];
+		}
+		return [
+			'success' => false,
+			'message' => 'Proposal draft not found'
+		];
+	}
+
+	public function submitSurvey(Request $request, $id)
+	{
+		$user = Auth::user();
+		if ($user->hasRole('member')) {
+			$survey = Survey::where('id', $id)->where('status', 'active')->first();
+			if (!$survey) {
+				return [
+					'success' => false,
+					'message' => 'The survey not exist'
+				];
+			}
+			$survey_result = SurveyResult::where('survey_id', $survey->id)->where('user_id', $user->id)->count();
+			if ($survey_result > 0) {
+				return [
+					'success' => false,
+					'message' => 'You submmited survey'
+				];
+			}
+			$validator = Validator::make($request->all(), [
+				'responses.*.proposal_id' => 'required|numeric|min:1|distinct',
+				'responses.*.place_choice' => "required|numeric|distinct|min:1|max:$survey->number_response",
+			]);
+			if ($validator->fails()) {
+				return [
+					'success' => false,
+					'message' => $validator->errors()
+				];
+			}
+			$datas = $request->responses;
+			$result = [];
+			foreach ($datas as $data) {
+				$proposal_id = $data['proposal_id'];
+				$proposal = Proposal::where('proposal.status', 'approved')->where('id', $proposal_id)
+					->doesntHave('votes')->first();
+				if (!$proposal) {
+					return [
+						'success' => false,
+						'message' => "Proposal discusstion $proposal_id does not exist"
+					];
+				}
+				$data['point'] = Helper::getPointSurvey($data['place_choice']);
+				$data['user_id'] = $user->id;
+				$data['survey_id'] = $id;
+				$data['created_at'] = now();
+				$data['updated_at'] = now();
+				array_push($result, $data);
+			}
+			SurveyResult::where('survey_id', $id)->where('user_id', $user->id)->delete();
+			SurveyResult::insert($result);
+			$survey->update(['user_responded' =>  $survey->user_responded + 1]);
+			return ['success' => true];
+		} else {
+			return ['success' => false];
+		}
+	}
+
+	public function getCurentSurvey()
+	{
+		$user = Auth::user();
+		$survey = Survey::with(['surveyRanks' => function ($q) {
+			$q->orderBy('rank', 'desc');
+		}])->with(['surveyRanks.proposal'])->orderBy('created_at', 'desc')->first();
+		if (!$survey) {
+			return [
+				'success' => false,
+				'message' => 'Not found survey'
+			];
+		}
+		$survey_result = SurveyResult::where('survey_id', $survey->id)->where('user_id', $user->id)->count();
+		$survey->is_submitted = $survey_result > 0 ? true : false;
+		$time_left = null;
+		if ($survey->status == 'active') {
+			$time_left = Carbon::parse($survey->end_time)->diff(now())->format('%dd %hh:%mm');;
+		}
+		$survey->time_left = $time_left;
+		return [
+			'success' => true,
+			'survey' => $survey,
+		];
+	}
+
+	public function uploadFiletDraftProposal(Request $request)
+	{
+		$user = Auth::user();
+
+		if ($user) {
+			$proposalDraftId = (int) $request->get('proposal_draft_id');
+			$proposalDraft = ProposalDraft::where('id', $proposalDraftId)->where('user_id', $user->id)->first();
+			$ids_to_remove = $request->get('ids_to_remove');
+			$names = $request->get('names');
+			$files = $request->file('files');
+			if (!$proposalDraft) {
+				return [
+					'success' => false,
+					'message' => 'Invalid proposal draft'
+				];
+			}
+
+			// Remove Files
+			if ($ids_to_remove) {
+				$temp = explode(",", $ids_to_remove);
+				foreach ($temp as $id) {
+					if ((int) $id)
+						ProposalDraftFile::where('id', (int) $id)->where('proposal_draft_id', $proposalDraftId)->delete();
+				}
+			}
+
+			// Add Files
+			if (
+				$files &&
+				$names &&
+				is_array($files) &&
+				is_array($names) &&
+				count($files) == count($names)
+			) {
+				for ($i = 0; $i < count($files); $i++) {
+					$file = $files[$i];
+					$name = $names[$i];
+
+					if ($file && $name) { // New File
+						$path = $file->store('proposal');
+						$url = Storage::url($path);
+
+						$proposalFile = new ProposalDraftFile();
+						$proposalFile->proposal_draft_id = $proposalDraftId;
+						$proposalFile->name = $name;
+						$proposalFile->path = $path;
+						$proposalFile->url = $url;
+						$proposalFile->save();
+					}
+				}
+			}
+
+			return ['success' => true];
+		}
+
+		return ['success' => false];
+	}
+
+	public function getListUserVA(Request $request)
+	{
+		// Variables
+		$sort_key = $sort_direction = $search = '';
+		$page_id = 0;
+		$data = $request->all();
+		if ($data && is_array($data)) extract($data);
+
+		if (!$sort_key) $sort_key = 'id';
+		if (!$sort_direction) $sort_direction = 'desc';
+		$page_id = (int) $page_id;
+		if ($page_id <= 0) $page_id = 1;
+		$limit = isset($data['limit']) ? $data['limit'] : 10;
+		$start = $limit * ($page_id - 1);
+
+		// Records
+		$users = User::join('profile', 'users.id', '=', 'profile.user_id')
+		->where('users.is_admin', 0)
+		->where('users.is_guest', 0)
+		->where('can_access', 1)
+		->where('users.is_member', 1)
+		->where(function ($query) use ($search) {
+			if ($search) {
+				$query->where('users.first_name', 'like', '%' . $search . '%')
+					->orWhere('users.last_name', 'like', '%' . $search . '%')
+					->orWhere('users.email', 'like', '%' . $search . '%');
+			}
+		})
+		->select([
+			'users.*',
+			'profile.company',
+			'profile.dob',
+			'profile.country_citizenship',
+			'profile.country_residence',
+			'profile.address',
+			'profile.city',
+			'profile.zip',
+			'profile.step_review',
+			'profile.step_kyc',
+			'profile.rep',
+			'profile.forum_name',
+			'profile.telegram',
+		])->get();
+		foreach ($users as $user) {
+			$member_at = Carbon::parse($user->member_at)->format('Y-m-d');
+				$total_informal_votes = Vote::where('type', 'informal')->where('result', '!=', 'no-quorum')
+					->where('created_at', '>=', $member_at)
+					->whereHas('proposal', function ($query) use ($user) {
+						$query->where('proposal.user_id', '!=', $user->id);
+					})->count();
+				$total_voted = VoteResult::join('vote', 'vote.id', '=', 'vote_result.vote_id')
+				->where('vote_result.user_id', $user->id)->where('vote.type', 'informal')
+				->where('vote.result', '!=', 'no-quorum')->where('vote.created_at', '>=', $member_at)->count();
+			$user->total_vote_percent = $total_voted > 0 ? ($total_voted / $total_informal_votes) * 100 : 0 ;
+			$total_staked = DB::table('reputation')
+			->where('user_id', $user->id)
+				->where('type', 'Staked')
+				->sum('staked');
+			$user->total_rep = abs($total_staked) + $user->rep;
+
+			// get last month
+			$firstDayofPreviousMonth = Carbon::now()->startOfMonth()->subMonth()->format('Y-m-d');
+			$lastDayofPreviousMonth = Carbon::now()->subMonth()->endOfMonth()->format('Y-m-d');
+			$start_date = $member_at >= $firstDayofPreviousMonth  ?  $member_at : $firstDayofPreviousMonth;
+			$last_month_informal_votes = Vote::where('type', 'informal')
+				->where('vote.result', '!=', 'no-quorum')
+				->whereHas('proposal', function ($query) use ($user) {
+					$query->where('proposal.user_id', '!=', $user->id);
+				})
+				->where(function ($query) use ($start_date, $lastDayofPreviousMonth) {
+					if ($start_date) {
+						$query->whereDate('created_at', '>=', $start_date);
+					}
+					if ($lastDayofPreviousMonth) {
+						$query->whereDate('created_at', '<=', $lastDayofPreviousMonth);
+					}
+				})->count();
+			$last_month_voted = VoteResult::join('vote', 'vote.id', '=', 'vote_result.vote_id')
+			->where('vote_result.user_id', $user->id)->where('vote.type', 'informal')
+			->where('vote.result', '!=', 'no-quorum')
+			->where(function ($query) use ($start_date, $lastDayofPreviousMonth) {
+				if ($start_date) {
+					$query->whereDate('vote.created_at', '>=', $start_date);
+				}
+				if ($lastDayofPreviousMonth) {
+					$query->whereDate('vote.created_at', '<=', $lastDayofPreviousMonth);
+				}
+			})->count();
+			$user->last_month_vote_percent = $last_month_voted > 0 ? ($last_month_voted / $last_month_informal_votes) * 100 : 0 ;
+
+			$firstDayofMonth = Carbon::now()->startOfMonth()->format('Y-m-d');
+			$start_date = $member_at >= $firstDayofMonth  ?  $member_at : $firstDayofMonth;
+			$this_month_informal_votes = Vote::where('type', 'informal')
+				->where('vote.result', '!=', 'no-quorum')
+				->whereHas('proposal', function ($query) use ($user) {
+					$query->where('proposal.user_id', '!=', $user->id);
+				})
+				->where(function ($query) use ($start_date) {
+					if ($start_date) {
+						$query->whereDate('created_at', '>=', $start_date);
+					}
+				})->count();
+			$this_month_voted = VoteResult::join('vote', 'vote.id', '=', 'vote_result.vote_id')
+			->where('vote_result.user_id', $user->id)->where('vote.type', 'informal')
+			->where('vote.result', '!=', 'no-quorum')
+			->where(function ($query) use ($start_date) {
+				if ($start_date) {
+					$query->whereDate('vote.created_at', '>=', $start_date);
+				}
+			})->count();
+			$user->this_month_vote_percent = $this_month_voted > 0 ? ($this_month_voted / $this_month_informal_votes) * 100 : 0 ;
+		}
+		if ($sort_direction == 'asc') {
+			$sorted = $users->sortBy($sort_key)->values();
+		} else {
+			$sorted = $users->sortByDesc($sort_key)->values();
+		}
+		$response = $sorted->slice($start, $limit)->values();
+		return [
+			'success' => true,
+			'total_members' => Helper::getTotalMembers(),
+			'users' => $response,
+			'finished' => count($response) < $limit ? true : false
+		];
+	}
+
+	// Get Reputation Track
+	public function exportCSVReputationTrack(Request $request)
+	{
+		$user = Auth::user();
+		// Variables
+		$sort_key = $sort_direction = $search = '';
+		$data = $request->all();
+		if ($data && is_array($data)) extract($data);
+
+		if (!$sort_key) $sort_key = 'reputation.id';
+		if (!$sort_direction) $sort_direction = 'desc';
+
+		$items = Reputation::leftJoin('proposal', 'proposal.id', '=', 'reputation.proposal_id')
+		->leftJoin('users', 'users.id', '=', 'proposal.user_id')
+		->where('reputation.user_id', $user->id)
+		->where(function ($query) use ($search) {
+			if ($search) {
+				$query->where('proposal.title', 'like', '%' . $search . '%')
+				->orWhere('reputation.type', 'like', '%' . $search . '%');
+			}
+		})
+		->select([
+			'reputation.*',
+			'proposal.include_membership',
+			'proposal.title as proposal_title',
+			'users.first_name as op_first_name',
+			'users.last_name as op_last_name'
+		])
+		->orderBy($sort_key, $sort_direction)
+		->get();
+		return Excel::download(new MyReputationExport($items), 'my_reputation.csv');
+	}
+
+	public function checkMentor(Request $request)
+	{
+		$user = Auth::user();
+		$user = User::where('users.is_admin', 0)->where('users.id', '!=', $user->id)
+		->join('profile', 'users.id', '=', 'profile.user_id')
+		->where(function ($query) use ($request) {
+				$query->where('users.email', $request->name_mentor)
+				->orWhere('profile.forum_name',$request->name_mentor);
+		})->first();
+		if($user) {
+			return [
+				'success' => true,
+				'user' => $user,
+			];
+		} else {
+			return ['success' => false];
+		}
+	}
+
+	public function settingDailyCSVReputation(Request $request)
+	{
+		$validator = Validator::make($request->all(), [
+			'setting' => 'required|in:0,1',
+		]);
+		if ($validator->fails()) {
+			return [
+				'success' => false,
+				'message' => 'setting should be 0 or 1'
+			];
+		}
+		$user = Auth::user();
+		$setting = $request->setting;
+		$user->notice_send_reputation = $setting;
+		$user->save();
+		return [
+			'success' => true,
+		];
+	}
+ 
 }

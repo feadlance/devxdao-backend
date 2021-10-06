@@ -18,7 +18,9 @@ Route::get('/', function () {
 });
 
 // Auth::routes();
+if(config('app.install_route_enabled')) {
+	Route::get('/install', 'InstallController@install');
+	Route::get('/install-emailer', 'InstallController@installEmailer');
+	Route::get('/clear', 'InstallController@clear');
+}
 
-Route::get('/install', 'InstallController@install');
-// Route::get('/install-emailer', 'InstallController@installEmailer');
-// Route::get('/clear', 'InstallController@clear');

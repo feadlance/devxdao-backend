@@ -34,4 +34,21 @@ return [
         'api_key' => env('HELLOSIGN_API_KEY'),
         'client_id' => env('HELLOSIGN_CLIENT_ID'),
     ],
+
+    'stripe' => [
+        'sk_live' => env('STRIPE_SK_LIVE'),
+        'sk_test' => env('STRIPE_SK_TEST'),
+    ],
+
+    'x_cmc_pro' => [
+        'api_key' => env('X_CMC_PRO_API_KEY'),
+    ],
+
+    'shuftipro' => [
+        'client_id_prod' => env('SHUFTIPRO_CLIENTID_PROD'),
+        'client_id_test' => env('SHUFTIPRO_CLIENTID_TEST'),
+        'client_secret_prod' => env('SHUFTIPRO_CLIENTSECRET_PROD'),
+        'client_secret_test' => env('SHUFTIPRO_CLIENTSECRET_TEST'),
+    ],
+
 ];

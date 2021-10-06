@@ -159,6 +159,7 @@ class CheckVote extends Command
                     Helper::startFinalGrant($proposal);
                     $op = User::find($proposal->user_id);
                     Helper::sendGrantHellosign($op, $proposal, $settings);
+                    Helper::createGrantTracking($proposal->id, "Passed Formal vote", 'passed_formal_vote');
                 } else {
                     // Emailer
                     Helper::triggerUserEmail($op, 'Formal Grant Vote Failed', $emailerData, $proposal, $vote);

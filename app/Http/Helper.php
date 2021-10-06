@@ -18,6 +18,7 @@ use App\Reputation;
 use App\OnBoarding;
 use App\Citation;
 use App\FinalGrant;
+use App\GrantTracking;
 use App\SponsorCode;
 use App\Signature;
 
@@ -25,13 +26,23 @@ use App\Mail\AdminAlert;
 use App\Mail\UserAlert;
 
 use App\Jobs\MemberAlert;
+use App\Milestone;
+use App\MilestoneLog;
+use App\MilestoneSubmitHistory;
+use App\RepHistory;
 use App\Shuftipro;
 use App\SignatureGrant;
+use App\Survey;
+use App\SurveyResult;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
+use PHPUnit\TextUI\Help;
 
-class Helper {
+class Helper
+{
   // Upgrade to Voting Associate
-  public static function upgradeToVotingAssociate($user) {
+  public static function upgradeToVotingAssociate($user)
+  {
     $count = User::where('is_member', 1)->get()->count();
 
     $user->is_member = 1;
@@ -44,20 +55,22 @@ class Helper {
   }
 
   // Generate Random Two FA Code
-  public static function generateTwoFACode() {
-    $randlist = ['1','2','3','4','5','6','7','8','9','A','C','E','F','G','H','K','N','P','Q','R','T','W','X','Z'];
-    $code1 = $randlist[rand(0,23)];
-    $code2 = $randlist[rand(0,23)];
-    $code3 = $randlist[rand(0,23)];
-    $code4 = $randlist[rand(0,23)];
-    $code5 = $randlist[rand(0,23)];
-    $code6 = $randlist[rand(0,23)];
+  public static function generateTwoFACode()
+  {
+    $randlist = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'C', 'E', 'F', 'G', 'H', 'K', 'N', 'P', 'Q', 'R', 'T', 'W', 'X', 'Z'];
+    $code1 = $randlist[rand(0, 23)];
+    $code2 = $randlist[rand(0, 23)];
+    $code3 = $randlist[rand(0, 23)];
+    $code4 = $randlist[rand(0, 23)];
+    $code5 = $randlist[rand(0, 23)];
+    $code6 = $randlist[rand(0, 23)];
     $code = $code1 . $code2 . $code3 . $code4 . $code5 . $code6;
     return $code;
   }
 
   // Generate Random String
-  public static function generateRandomString($length_of_string) {
+  public static function generateRandomString($length_of_string)
+  {
     // String of all alphanumeric character
     $str_result = '123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ';
 
@@ -66,28 +79,47 @@ class Helper {
   }
 
   // Complete Proposal
-  public static function completeProposal($proposal) {
+  public static function completeProposal($proposal, $check_first_proposal = true)
+  {
     $proposal->status = 'completed';
     $proposal->save();
+    Helper::createGrantTracking($proposal->id, 'Grant 100% complete', 'grant_completed');
+    $user = User::find($proposal->user_id);
 
-    $items = Reputation::where('proposal_id', $proposal->id)
-                      ->where('type', 'Minted Pending')
-                      ->get();
+    if (
+      $user && $user->hasRole('member')
+    ) {
+      $items = Reputation::where('proposal_id', $proposal->id)->where('type', 'Minted Pending')->get();
+    } else {
+      $items = Reputation::where('proposal_id', $proposal->id)->where('type', 'Minted Pending')->where('user_id', '!=', $proposal->user_id)->get();
+      $proposal->type_status = 'pending';
+      $proposal->save();
+      if ($check_first_proposal) {
+        $count = Proposal::where('user_id', $user->id)->where('status', 'completed')->count();
+        if ($count == 1) {
+          $user->check_first_compeleted_proposal = 1;
+          $user->save();
+        }
+      }
+    }
 
     if ($items) {
       foreach ($items as $item) {
         $user = User::with('profile')
-                    ->has('profile')
-                    ->where('id', $item->user_id)
-                    ->first();
+          ->has('profile')
+          ->where('id', $item->user_id)
+          ->first();
 
         $value = (float) $item->pending;
         if ($value > 0) {
           $user->profile->rep_pending = (float) $user->profile->rep_pending - $value;
           if ((float) $user->profile->rep_pending < 0)
             $user->profile->rep_pending = 0;
-          $user->profile->rep = (float) $user->profile->rep + $value;
-          $user->profile->save();
+          // $user->profile->rep = (float) $user->profile->rep + $value;
+          // $user->profile->save();
+          Helper::updateRepProfile($user->id, $value);
+          Helper::createRepHistory($user->id, $value, $user->profile->rep, 'Minted', $item->event, $proposal->id, null , 'completeProposal');
+
         }
 
         $item->type = 'Minted';
@@ -99,7 +131,8 @@ class Helper {
   }
 
   // Start Final Grant
-  public static function startFinalGrant($proposal) {
+  public static function startFinalGrant($proposal)
+  {
     $finalGrant = FinalGrant::where('proposal_id', $proposal->id)->first();
     if (!$finalGrant) {
       $finalGrant = new FinalGrant;
@@ -109,21 +142,23 @@ class Helper {
       $finalGrant->milestones_complete = 0;
       $finalGrant->milestones_total = count($proposal->milestones);
       $finalGrant->save();
+      Helper::createGrantTracking($proposal->id, 'Grant activated by ETA', 'grant_activated');
     }
     return $finalGrant;
   }
 
   // Get Sponsor
-  public static function getSponsor($proposal) {
+  public static function getSponsor($proposal)
+  {
     $sponsor_code_id = (int) $proposal->sponsor_code_id;
     if ($sponsor_code_id) {
       $codeObject = SponsorCode::find($sponsor_code_id);
       if ($codeObject) {
         $user_id = (int) $codeObject->user_id;
         $sponsor = User::with('profile')
-                        ->has('profile')
-                        ->where('id', $user_id)
-                        ->first();
+          ->has('profile')
+          ->where('id', $user_id)
+          ->first();
 
         return $sponsor;
       }
@@ -132,27 +167,28 @@ class Helper {
     return null;
   }
 
-	// Run Winner Flow
-	public static function runWinnerFlow($proposal, $vote, $settings) {
-		$op = User::with('profile')->where('id', $proposal->user_id)->first();
+  // Run Winner Flow
+  public static function runWinnerFlow($proposal, $vote, $settings)
+  {
+    $op = User::with('profile')->where('id', $proposal->user_id)->first();
 
     // $sponsor = self::getSponsor($proposal);
     $sponsor = null;
 
-		$for_value = (int) $vote->for_value;
-    $against_value = (int) $vote->against_value;
+    $for_value = (float) $vote->for_value;
+    $against_value = (float) $vote->against_value;
 
     // Get For Voters
     $itemsFor = VoteResult::where('proposal_id', $vote->proposal_id)
-                        ->where('vote_id', $vote->id)
-                        ->where('type', 'for')
-                        ->get();
+      ->where('vote_id', $vote->id)
+      ->where('type', 'for')
+      ->get();
 
     // Get Against Voters
     $itemsAgainst = VoteResult::where('proposal_id', $vote->proposal_id)
-                        ->where('vote_id', $vote->id)
-                        ->where('type', 'against')
-                        ->get();
+      ->where('vote_id', $vote->id)
+      ->where('type', 'against')
+      ->get();
 
     // Get Winning Side Voters
     $items = $itemsFor;
@@ -174,7 +210,7 @@ class Helper {
 
     // Split Algorithm - Grant Has Minted Pending
     foreach ($items as $item) {
-    	$value = (int) $item->value;
+      $value = (float) $item->value;
       $rate = (float) $value / ($for_value + (float) $proposal->rep);
 
       $extra = (float) $against_value * $rate;
@@ -188,24 +224,26 @@ class Helper {
 
       $voter = User::with('profile')->where('id', $item->user_id)->first();
       if ($voter && isset($voter->profile)) {
-        $voter->profile->rep = (float) $voter->profile->rep + $rep;
+        // $voter->profile->rep = (float) $voter->profile->rep + $rep;
+        Helper::updateRepProfile($voter->id, $rep);
         if (
           $proposal->type == "grant" &&
           $vote->content_type != "milestone"
         ) {
-        	$voter->profile->rep_pending = (float) $voter->profile->rep_pending + $extra_minted;
+          $voter->profile->rep_pending = (float) $voter->profile->rep_pending + $extra_minted;
         }
         $voter->profile->save();
+        Helper::createRepHistory($item->user_id, $rep,  $voter->profile->rep,'Gained', 'Proposal Vote Result', $proposal->id, $vote->id, 'runWinnerFlow');
 
         // Stake Returned
         if ($value != 0) {
           Reputation::where('user_id', $voter->id)
-                    ->where('proposal_id', $vote->proposal_id)
-                    ->where('type', 'Staked')
-                    //->where('event', 'Proposal Vote')
-                    ->where('vote_id', $vote->id)
-                    ->delete();
-				}
+            ->where('proposal_id', $vote->proposal_id)
+            ->where('type', 'Staked')
+            //->where('event', 'Proposal Vote')
+            ->where('vote_id', $vote->id)
+            ->delete();
+        }
 
         // Gained
         if ($extra != 0) {
@@ -234,22 +272,22 @@ class Helper {
           $reputation->type = "Minted Pending";
           $reputation->save();
         }
-    	}
+      }
     }
 
     // Stake Lost
     foreach ($itemsAgainst as $item) {
-    	$voter = User::with('profile')->where('id', $item->user_id)->first();
+      $voter = User::with('profile')->where('id', $item->user_id)->first();
 
       if ($voter && isset($voter->profile)) {
         $reputation = Reputation::where('user_id', $voter->id)
-                                ->where('proposal_id', $vote->proposal_id)
-                                ->where('type', 'Staked')
-                                ->where('event', 'Proposal Vote')
-                                ->where('vote_id', $vote->id)
-                                ->first();
+          ->where('proposal_id', $vote->proposal_id)
+          ->where('type', 'Staked')
+          ->where('event', 'Proposal Vote')
+          ->where('vote_id', $vote->id)
+          ->first();
         if ($reputation) {
-        	$value = (float) $reputation->staked;
+          $value = (float) $reputation->staked;
 
           if ($value != 0) {
             $reputationNew = new Reputation;
@@ -270,15 +308,15 @@ class Helper {
     // OP
     if ($op && isset($op->profile)) {
       $citations = Citation::with([
-                            'repProposal',
-                            'repProposal.user',
-                            'repProposal.user.profile'
-                          ])
-                          ->has('repProposal')
-                          ->has('repProposal.user')
-                          ->has('repProposal.user.profile')
-                          ->where('proposal_id', $proposal->id)
-                          ->get();
+        'repProposal',
+        'repProposal.user',
+        'repProposal.user.profile'
+      ])
+        ->has('repProposal')
+        ->has('repProposal.user')
+        ->has('repProposal.user.profile')
+        ->where('proposal_id', $proposal->id)
+        ->get();
 
       $percentage = 100;
       if (
@@ -315,13 +353,13 @@ class Helper {
       $op_minted_pending = (float)($op_minted_pending * $percentage / 100);
       $op_minted_pending = round($op_minted_pending, 2);
 
-      $op->profile->rep =
-          (float) $op->profile->rep +
-          (float) $op_extra +
-          (float) $proposal->rep;
-
+      // $op->profile->rep =
+      //   (float) $op->profile->rep +
+      //   (float) $op_extra +
+      //   (float) $proposal->rep;
+      Helper::updateRepProfile($op->id, (float) $op_extra + (float) $proposal->rep);
       if ($proposal->type == "grant" && $vote->content_type != "milestone") {
-      	if ($sponsor) {
+        if ($sponsor) {
           $sponsor->profile->rep_pending = (float) $sponsor->profile->rep_pending + $op_minted_pending;
           $sponsor->profile->save();
         } else {
@@ -330,13 +368,14 @@ class Helper {
       }
 
       $op->profile->save();
+      Helper::createRepHistory($op->id, (float) $op_extra + (float) $proposal->rep, $op->profile->rep,'Gained', 'Proposal Vote Result', $proposal->id, $vote->id, 'runWinnerFlow2');
 
       // Stake Returned
       if ((float) $proposal->rep != 0) {
         Reputation::where('user_id', $op->id)
-                  ->where('proposal_id', $vote->proposal_id)
-                  ->where('type', 'Staked')
-                  ->delete();
+          ->where('proposal_id', $vote->proposal_id)
+          ->where('type', 'Staked')
+          ->delete();
       }
 
       // Gained
@@ -378,33 +417,34 @@ class Helper {
         }
       }
     }
-	}
+  }
 
-	// Run Loser Flow
-	public static function runLoserFlow($proposal, $vote, $settings) {
-		$op = User::with('profile')->where('id', $proposal->user_id)->first();
+  // Run Loser Flow
+  public static function runLoserFlow($proposal, $vote, $settings)
+  {
+    $op = User::with('profile')->where('id', $proposal->user_id)->first();
 
-    $for_value = (int) $vote->for_value;
-    $against_value = (int) $vote->against_value;
+    $for_value = (float) $vote->for_value;
+    $against_value = (float) $vote->against_value;
 
     // Get For Voters
     $itemsFor = VoteResult::where('proposal_id', $vote->proposal_id)
-                        ->where('vote_id', $vote->id)
-                        ->where('type', 'for')
-                        ->get();
+      ->where('vote_id', $vote->id)
+      ->where('type', 'for')
+      ->get();
 
     // Get Against Voters
     $itemsAgainst = VoteResult::where('proposal_id', $vote->proposal_id)
-                        ->where('vote_id', $vote->id)
-                        ->where('type', 'against')
-                        ->get();
+      ->where('vote_id', $vote->id)
+      ->where('type', 'against')
+      ->get();
 
     // Get Losing Side Voters
     $items = $itemsAgainst;
 
     // Split Algorithm - Has No Minted Pending
     foreach ($items as $item) {
-    	$value = (int) $item->value;
+      $value = (float) $item->value;
       $rate = (float) $value / $against_value;
 
       $extra = (float) ($for_value + (float) $proposal->rep) * $rate;
@@ -413,19 +453,21 @@ class Helper {
       $rep = $value + $extra;
       $rep = (float) round($rep, 2);
 
-     	$voter = User::with('profile')->where('id', $item->user_id)->first();
+      $voter = User::with('profile')->where('id', $item->user_id)->first();
       if ($voter && isset($voter->profile)) {
-        $voter->profile->rep = (float) $voter->profile->rep + $rep;
-        $voter->profile->save();
-
+        // $voter->profile->rep = (float) $voter->profile->rep + $rep;
+        // $voter->profile->save();
+        Helper::updateRepProfile($voter->id, $rep);
+        Helper::createRepHistory($item->user_id, $rep, $voter->profile->rep, 'Gained', 'Proposal Vote Result',$proposal->id, $vote->id, 'runLoserFlow');
+        
         // Stake Returned
         if ($value != 0) {
           Reputation::where('user_id', $voter->id)
-                    ->where('proposal_id', $vote->proposal_id)
-                    ->where('vote_id', $vote->id)
-                    ->where('type', 'Staked')
-                    //->where('event', 'Proposal Vote')
-                    ->delete();
+            ->where('proposal_id', $vote->proposal_id)
+            ->where('vote_id', $vote->id)
+            ->where('type', 'Staked')
+            //->where('event', 'Proposal Vote')
+            ->delete();
         }
 
         // Gained
@@ -448,15 +490,15 @@ class Helper {
 
       if ($voter && isset($voter->profile)) {
         $reputation = Reputation::where('user_id', $voter->id)
-                                ->where('proposal_id', $vote->proposal_id)
-                                ->where('vote_id', $vote->id)
-                                ->where('event', 'Proposal Vote')
-                                ->where('type', 'Staked')
-                                ->first();
+          ->where('proposal_id', $vote->proposal_id)
+          ->where('vote_id', $vote->id)
+          ->where('event', 'Proposal Vote')
+          ->where('type', 'Staked')
+          ->first();
         if ($reputation) {
           $value = (float) $reputation->staked;
 
-	        if ($value != 0) {
+          if ($value != 0) {
             $reputationNew = new Reputation;
             $reputationNew->user_id = $voter->id;
             $reputationNew->proposal_id = $vote->proposal_id;
@@ -465,7 +507,7 @@ class Helper {
             $reputationNew->type = "Stake Lost";
             $reputationNew->event = "Proposal Vote Result";
             $reputationNew->save();
-	        }
+          }
 
           $reputation->delete();
         }
@@ -476,11 +518,11 @@ class Helper {
     if ($op && isset($op->profile)) {
       // Create Reputation Track
       $reputation = Reputation::where('user_id', $op->id)
-                              ->where('proposal_id', $vote->proposal_id)
-                              ->where('type', 'Staked')
-                              ->first();
+        ->where('proposal_id', $vote->proposal_id)
+        ->where('type', 'Staked')
+        ->first();
       if ($reputation) {
-      	$value = (float) $reputation->staked;
+        $value = (float) $reputation->staked;
 
         if ($value != 0) {
           $reputationNew = new Reputation;
@@ -496,46 +538,50 @@ class Helper {
         $reputation->delete();
       }
     }
-	}
+  }
 
-	// Give Vote Rep Back
-	public static function clearVoters($vote) {
-		if ($vote->type != "formal") return false;
+  // Give Vote Rep Back
+  public static function clearVoters($vote)
+  {
+    if ($vote->type != "formal") return false;
 
     $items = VoteResult::where('proposal_id', $vote->proposal_id)
-                        ->where('vote_id', $vote->id)
-                        ->get();
+      ->where('vote_id', $vote->id)
+      ->get();
 
     foreach ($items as $item) {
-    	$userId = (int) $item->user_id;
-    	$value = (int) $item->value;
+      $userId = (int) $item->user_id;
+      $value = (float) $item->value;
 
-    	$profile = Profile::where('user_id', $userId)->first();
-    	if ($profile) {
-    		$profile->rep = (float) $profile->rep + $value;
-    		$profile->save();
+      $profile = Profile::where('user_id', $userId)->first();
+      if ($profile) {
+        // $profile->rep = (float) $profile->rep + $value;
+        // $profile->save();
+        Helper::updateRepProfile($userId, $value);
+        Helper::createRepHistory($userId,  $value,  $profile->rep, 'Gained', 'Proposal Vote Result', $vote->proposal_id, $vote->id, 'clearVoters');
 
-    		Reputation::where('user_id', $userId)
-                  ->where('proposal_id', $vote->proposal_id)
-                  ->where('vote_id', $vote->id)
-                  ->where('type', 'Staked')
-                  ->delete();
-    	}
+        Reputation::where('user_id', $userId)
+          ->where('proposal_id', $vote->proposal_id)
+          ->where('vote_id', $vote->id)
+          ->where('type', 'Staked')
+          ->delete();
+      }
     }
-	}
+  }
 
   // Send Admin Email
-  public static function triggerAdminEmail($title, $emailerData, $proposal = null, $vote = null, $user = null) {
+  public static function triggerAdminEmail($title, $emailerData, $proposal = null, $vote = null, $user = null, $total_rep = null)
+  {
     if (count($emailerData['admins'] ?? [])) {
       $item = $emailerData['triggerAdmin'][$title] ?? null;
       if ($item) {
         $content = $item['content'];
-        $subject =$item['subject'];
+        $subject = $item['subject'];
         if ($proposal) {
-            $content = str_replace('[title]', $proposal->title, $content);
-            $content = str_replace('[number]', $proposal->id, $content);
-            $content = str_replace('[proposal title]', $proposal->title, $content);
-            $content = str_replace('[proposal number]', $proposal->id, $content);
+          $content = str_replace('[title]', $proposal->title, $content);
+          $content = str_replace('[number]', $proposal->id, $content);
+          $content = str_replace('[proposal title]', $proposal->title, $content);
+          $content = str_replace('[proposal number]', $proposal->id, $content);
         }
         if ($vote) {
           $content = str_replace('[voteType]', $vote->type, $content);
@@ -549,18 +595,25 @@ class Helper {
 
           $subject = str_replace('[name]', $name, $subject);
         }
+        if ($total_rep) {
+          $content = str_replace('[total rep]', $total_rep, $content);
+        }
         Mail::to($emailerData['admins'])->send(new AdminAlert($subject, $content));
       }
     }
   }
 
   // Send User Email
-  public static function triggerUserEmail($to, $title, $emailerData, $proposal = null, $vote = null, $user = null, $extra = []) {
+  public static function triggerUserEmail($to, $title, $emailerData, $proposal = null, $vote = null, $user = null, $extra = [], $milestone = null, $denyReason = null)
+  {
     $item = $emailerData['triggerUser'][$title] ?? null;
     if ($item) {
+      $subject = $item['subject'];
       $content = $item['content'];
       if ($proposal) {
         $content = str_replace('[title]', $proposal->title, $content);
+        $content = str_replace('[proposalId]', $proposal->id, $content);
+        $subject = str_replace('[proposalId]', $proposal->id, $subject);
       }
       if (isset($extra['pendingChangesCount'])) {
         $content = str_replace('[pendingChangesCount]', $extra['pendingChangesCount'], $content);
@@ -577,12 +630,19 @@ class Helper {
         $content = str_replace('[first_name]', $user->first_name, $content);
         $content = str_replace('[last_name]', $user->last_name, $content);
       }
-      Mail::to($to)->send(new UserAlert($item['subject'], $content));
+      if ($milestone) {
+        $content = str_replace('[milestoneId]', $milestone->id, $content);
+      }
+      if ($denyReason) {
+        $content = str_replace('[deny reason]', $denyReason, $content);
+      }
+      Mail::to($to)->send(new UserAlert($subject, $content));
     }
   }
 
   // Send Member Email
-  public static function triggerMemberEmail($title, $emailerData, $proposal = null, $vote = null, $discusstions = null, $votingToday = null,  $noQuorumVotes = null) {
+  public static function triggerMemberEmail($title, $emailerData, $proposal = null, $vote = null, $discusstions = null, $votingToday = null,  $noQuorumVotes = null)
+  {
     $item = $emailerData['triggerMember'][$title] ?? null;
     if ($item) {
       $subject = $item['subject'];
@@ -597,14 +657,14 @@ class Helper {
       if ($vote) {
         $subject = str_replace('[voteContentType]', $vote->content_type, $subject);
       }
-      if($discusstions) {
+      if ($discusstions) {
         $titleDiscussion = '';
         foreach ($discusstions as  $value) {
           $titleDiscussion .= "- $value->title <br>";
         }
         $content = str_replace('[Proposal Tittle Discussions]', $titleDiscussion, $content);
       }
-      if($votingToday) {
+      if ($votingToday) {
         $titleVoting = '';
         foreach ($votingToday as  $value) {
           $titleVoting .= "- $value->title - $value->type $value->content_type Vote <br>";
@@ -612,7 +672,7 @@ class Helper {
         $content = str_replace('[Proposal started vote today]', $titleVoting, $content);
       }
       $now = Carbon::parse('UTC');
-      if($noQuorumVotes) {
+      if ($noQuorumVotes) {
         $titleNoQuorum = '';
         foreach ($noQuorumVotes as  $value) {
           $titleNoQuorum .= "- $value->title <br>";
@@ -620,8 +680,8 @@ class Helper {
         $content = str_replace('[Proposal not reached quorum]', $titleNoQuorum, $content);
       }
       $members = User::where('is_member', 1)
-                      ->where('banned', 0)
-                      ->get();
+        ->where('banned', 0)
+        ->get();
 
       if ($members) {
         foreach ($members as $member) {
@@ -632,7 +692,8 @@ class Helper {
   }
 
   // Send Membership Hellosign Request
-  public static function sendMembershipHellosign($user, $proposal, $settings) {
+  public static function sendMembershipHellosign($user, $proposal, $settings)
+  {
     $client = new \HelloSign\Client(config('services.hellosign.api_key'));
 
     $request = new \HelloSign\TemplateSignatureRequest;
@@ -649,14 +710,14 @@ class Helper {
       $user->first_name . ' ' . $user->last_name
     );
 
-    if (isset($settings['coo_email']) && $settings['coo_email']) {
-      // COO Signer
-      $request->setSigner(
-        'COO',
-        $settings['coo_email'],
-        'COO'
-      );
-    }
+    // if (isset($settings['coo_email']) && $settings['coo_email']) {
+    //   // COO Signer
+    //   $request->setSigner(
+    //     'COO',
+    //     $settings['coo_email'],
+    //     'COO'
+    //   );
+    // }
 
     $response = $client->sendTemplateSignatureRequest($request);
     $signature_request_id = $response->getId();
@@ -668,7 +729,8 @@ class Helper {
   }
 
   // Send Onboarding Hellosign Request 1
-  public static function sendOnboardingHellosign1($user, $proposal, $settings) {
+  public static function sendOnboardingHellosign1($user, $proposal, $settings)
+  {
     $client = new \HelloSign\Client(config('services.hellosign.api_key'));
 
     $request = new \HelloSign\TemplateSignatureRequest;
@@ -676,7 +738,7 @@ class Helper {
 
     $request->setTemplateId('433b94ed3747e2d7a0831e3fc0a6bd0ab33f7d78');
     $request->setSubject('Grant Agreement');
-    if($proposal->pdf){
+    if ($proposal->pdf) {
       $urlFile = public_path() . $proposal->pdf;
       $request->addFile($urlFile);
     }
@@ -700,8 +762,8 @@ class Helper {
 
     // OP Signer
     $signature = Signature::where('role', 'OP')
-                            ->where('email', $user->email)
-                            ->first();
+      ->where('email', $user->email)
+      ->first();
     if (!$signature) $signature = new Signature;
     $signature->proposal_id = $proposal->id;
     $signature->name = $user->first_name . ' ' . $user->last_name;
@@ -757,36 +819,39 @@ class Helper {
     return $response;
   }
 
-	// Start Onboarding
-	public static function startOnboarding($proposal, $vote, $status = 'pending') {
-		if ($vote->type != "informal") return null;
+  // Start Onboarding
+  public static function startOnboarding($proposal, $vote, $status = 'pending')
+  {
+    if ($vote->type != "informal") return null;
 
-		$onboarding = OnBoarding::where('proposal_id', $proposal->id)
-                            ->where('vote_id', $vote->id)
-                            ->first();
+    $onboarding = OnBoarding::where('proposal_id', $proposal->id)
+      ->where('vote_id', $vote->id)
+      ->first();
     if (!$onboarding) {
-        $onboarding = new OnBoarding;
-        $onboarding->proposal_id = $proposal->id;
-        $onboarding->vote_id = $vote->id;
-        $onboarding->user_id = $proposal->user_id;
-        $onboarding->status = $status;
-        $onboarding->save();
+      $onboarding = new OnBoarding;
+      $onboarding->proposal_id = $proposal->id;
+      $onboarding->vote_id = $vote->id;
+      $onboarding->user_id = $proposal->user_id;
+      $onboarding->status = $status;
+      $onboarding->save();
 
-        return $onboarding;
+      return $onboarding;
+      self::createGrantTracking($proposal->id, "Informal vote passed", 'informal_vote_passed');
     }
 
     return null;
-	}
+  }
 
-	// Start Formal Vote
-	public static function startFormalVote($vote) {
-		if ($vote->type != "informal") return false;
+  // Start Formal Vote
+  public static function startFormalVote($vote)
+  {
+    if ($vote->type != "informal") return false;
 
-		$proposal_id = (int) $vote->proposal_id;
+    $proposal_id = (int) $vote->proposal_id;
     $temp = Vote::where('proposal_id', $proposal_id)
-                ->where('type', 'formal')
-                ->where('content_type', '!=', 'milestone')
-                ->first();
+      ->where('type', 'formal')
+      ->where('content_type', '!=', 'milestone')
+      ->first();
 
     if (!$temp) {
       $temp = new Vote;
@@ -799,148 +864,141 @@ class Helper {
       // Save Formal Voting ID
       $vote->formal_vote_id = (int) $temp->id;
       $vote->save();
-
+      self::createGrantTracking($vote->proposal_id, "Entered Formal vote", 'entered_formal_vote');
       return $temp;
     }
 
     return null;
-	}
+  }
 
-	// Get Vote Result
-	public static function getVoteResult($proposal, $vote, $settings) {
-		$pass_rate = 0;
-		if ($vote->content_type == "grant")
-			$pass_rate = $settings["pass_rate"] ?? 0;
-		else if ($vote->content_type == "simple")
-			$pass_rate = $settings["pass_rate_simple"] ?? 0;
+  // Get Vote Result
+  public static function getVoteResult($proposal, $vote, $settings)
+  {
+    $pass_rate = 0;
+    if ($vote->content_type == "grant")
+      $pass_rate = $settings["pass_rate"] ?? 0;
+    else if ($vote->content_type == "simple")
+      $pass_rate = $settings["pass_rate_simple"] ?? 0;
     else if ($vote->content_type == "milestone")
       $pass_rate = $settings["pass_rate_milestone"] ?? 0;
 
-		$pass_rate = (float) $pass_rate;
+    $pass_rate = (float) $pass_rate;
 
-		$for_value = (float) $vote->for_value;
-		$against_value = (float) $vote->against_value;
-		$total = $for_value + $against_value;
+    $for_value = (float) $vote->for_value;
+    $against_value = (float) $vote->against_value;
+    $total = $for_value + $against_value;
 
-		$standard = (float)($total * $pass_rate / 100);
+    $standard = (float)($total * $pass_rate / 100);
 
-		if ($for_value > $standard) return "success";
-		return "fail";
-	}
+    if ($for_value > $standard) return "success";
+    return "fail";
+  }
 
-	// Get Total Members
-	public static function getTotalMembers() {
-		$totalMembers = User::where('is_member', 1)
-												->where('banned', 0)
-												->where('can_access', 1)
-												->get()
-												->count();
-		return $totalMembers;
-	}
+  // Get Total Members
+  public static function getTotalMembers()
+  {
+    $totalMembers = User::where('is_member', 1)
+      ->where('banned', 0)
+      ->where('can_access', 1)
+      ->get()
+      ->count();
+    return $totalMembers;
+  }
 
   // Get Total Members
   public static function getTotalMemberProposal($proposalId)
   {
-    $proposal = Proposal::where('id',
-      $proposalId
-    )->first();
-    if ($proposal->type == 'grant') {
-      $vote = Vote::where('proposal_id', $proposalId)->where('type', 'formal')
-      ->where('content_type', 'milestone')->first();
-      if ($vote) {
-        $result = Vote::where('proposal_id', $proposalId)->where('type', 'informal')
-          ->where('content_type', 'milestone')->orderBy('created_at', 'desc')->first();
-        return $result->result_count ?? self::getTotalMembers();
-      }
-      $vote =  Vote::where('proposal_id', $proposalId)->where('type', 'informal')
-        ->where('content_type', 'milestone')->first();
-      if($vote) {
-        return self::getTotalMembers();
-      }
-      $vote = Vote::where('proposal_id', $proposalId)->where('type', 'formal')
-      ->where('content_type', 'grant')->first();
-      if ($vote) {
-        $result = Vote::where('proposal_id', $proposalId)->where('type', 'informal')
-          ->where('content_type', 'grant')->orderBy('created_at', 'desc')->first();
-        return $result->result_count ?? self::getTotalMembers();
-      }
-
+    $proposal = Proposal::where('id', $proposalId)->first();
+    $vote = Vote::where('proposal_id', $proposalId)->orderBy('created_at', 'desc')->first();
+    if (!$vote) {
       return self::getTotalMembers();
-    } else {
-      $vote = Vote::where('proposal_id', $proposalId)->where('type', 'formal')
-      ->where('content_type', 'simple')->first();
-      if ($vote) {
-        $result = Vote::where('proposal_id', $proposalId)->where('type', 'informal')
-          ->where('content_type', 'simple')->orderBy('created_at', 'desc')->first();
-        return $result->result_count ?? self::getTotalMembers();
-      }
+    }
+    if ($vote->type == 'informal') {
       return self::getTotalMembers();
+    }
+    if ($vote->type == 'formal' && $vote->content_type == 'milestone') {
+      $result = Vote::where('proposal_id', $proposalId)->where('type', 'informal')
+        ->where('content_type', 'milestone')->orderBy('created_at', 'desc')->first();
+      return $result->result_count ?? self::getTotalMembers();
+    }
+    if ($vote->type == 'formal' && $vote->content_type == 'grant') {
+      $result = Vote::where('proposal_id', $proposalId)->where('type', 'informal')
+        ->where('content_type', 'grant')->orderBy('created_at', 'desc')->first();
+      return $result->result_count ?? self::getTotalMembers();
+    }
+    if ($vote->type == 'formal' && $vote->content_type == 'simple') {
+      $result = Vote::where('proposal_id', $proposalId)->where('type', 'informal')
+        ->where('content_type', 'simple')->orderBy('created_at', 'desc')->first();
+      return $result->result_count ?? self::getTotalMembers();
     }
     return self::getTotalMembers();
   }
 
-	// Get Settings
-	public static function getSettings() {
-		// Get Settings
+  // Get Settings
+  public static function getSettings()
+  {
+    // Get Settings
     $settings = [];
     $items = Setting::get();
     if ($items) {
       foreach ($items as $item) {
-      	$settings[$item->name] = $item->value;
+        $settings[$item->name] = $item->value;
       }
     }
     return $settings;
-	}
+  }
 
-	// Get Membership Proposal
-	public static function getMembershipProposal($user) {
-		return null;
-	}
+  // Get Membership Proposal
+  public static function getMembershipProposal($user)
+  {
+    return null;
+  }
 
-	// Get Emailer Data
-	public static function getEmailerData() {
-		$data = [
-			'admins' => [],
-			'triggerAdmin' => [],
-			'triggerUser' => [],
+  // Get Emailer Data
+  public static function getEmailerData()
+  {
+    $data = [
+      'admins' => [],
+      'triggerAdmin' => [],
+      'triggerUser' => [],
       'triggerMember' => []
-		];
+    ];
 
-		$admins = EmailerAdmin::where('id', '>', 0)
-													->orderBy('email', 'asc')->get();
-		$triggerAdmin = EmailerTriggerAdmin::where('id', '>', 0)
-																				->orderBy('id', 'asc')
-																				->get();
-		$triggerUser = EmailerTriggerUser::where('id', '>', 0)
-																			->orderBy('id', 'asc')
-																			->get();
+    $admins = EmailerAdmin::where('id', '>', 0)
+      ->orderBy('email', 'asc')->get();
+    $triggerAdmin = EmailerTriggerAdmin::where('id', '>', 0)
+      ->orderBy('id', 'asc')
+      ->get();
+    $triggerUser = EmailerTriggerUser::where('id', '>', 0)
+      ->orderBy('id', 'asc')
+      ->get();
     $triggerMember = EmailerTriggerMember::where('id', '>', 0)
-                                          ->orderBy('id', 'asc')
-                                          ->get();
+      ->orderBy('id', 'asc')
+      ->get();
 
-		if ($admins && count($admins)) {
-			foreach ($admins as $admin) {
-				$data['admins'][] = $admin->email;
-			}
-		}
+    if ($admins && count($admins)) {
+      foreach ($admins as $admin) {
+        $data['admins'][] = $admin->email;
+      }
+    }
 
-		if ($triggerAdmin && count($triggerAdmin)) {
-			foreach ($triggerAdmin as $item) {
-				if ((int) $item->enabled)
-					$data['triggerAdmin'][$item->title] = $item;
-				else
-					$data['triggerAdmin'][$item->title] = null;
-			}
-		}
+    if ($triggerAdmin && count($triggerAdmin)) {
+      foreach ($triggerAdmin as $item) {
+        if ((int) $item->enabled)
+          $data['triggerAdmin'][$item->title] = $item;
+        else
+          $data['triggerAdmin'][$item->title] = null;
+      }
+    }
 
-		if ($triggerUser && count($triggerUser)) {
-			foreach ($triggerUser as $item) {
-				if ((int) $item->enabled)
-					$data['triggerUser'][$item->title] = $item;
-				else
-					$data['triggerUser'][$item->title] = null;
-			}
-		}
+    if ($triggerUser && count($triggerUser)) {
+      foreach ($triggerUser as $item) {
+        if ((int) $item->enabled)
+          $data['triggerUser'][$item->title] = $item;
+        else
+          $data['triggerUser'][$item->title] = null;
+      }
+    }
 
     if ($triggerMember && count($triggerMember)) {
       foreach ($triggerMember as $item) {
@@ -951,37 +1009,43 @@ class Helper {
       }
     }
 
-		return $data;
-	}
+    return $data;
+  }
 
-   // Send grant Hellosign Request 1
-   public static function sendGrantHellosign($user,$proposal, $settings) {
+  // Send grant Hellosign Request 1
+  public static function sendGrantHellosign($user, $proposal, $settings)
+  {
     $client = new \HelloSign\Client(config('services.hellosign.api_key'));
-
+    $profile = Profile::where('user_id', $user->id)->first();
     $request = new \HelloSign\TemplateSignatureRequest;
     // $request->enableTestMode();
-
-    $request->setTemplateId('8f64a36e43db1478a499d76dfdc35f1f5b430203');
-    $subject = 'Verify Grant for proposal '. $proposal->id; 
+    $finalGrant = FinalGrant::where('proposal_id', $proposal->id)->first();
+    $request->setTemplateId('a77ecd6d708736d6ae0e2d8d35e5e54938c83436');
+    $subject = "Grant $proposal->id - Sign to activate DEVxDAO grant!";
     $request->setSubject($subject);
-    if($proposal->pdf) {
+    if ($proposal->pdf) {
       $urlFile = public_path() . $proposal->pdf;
       if (file_exists($urlFile)) {
         $request->addFile($urlFile);
       }
     }
     $request->setCustomFieldValue('FullName', $user->first_name . ' ' . $user->last_name);
-    
+
     $shuftipro = Shuftipro::where('user_id', $user->id)->first();
 
     $initialA = substr($user->first_name, 0, 1);
     $initialB = substr($user->last_name, 0, 1);
+
+    $full_address = "$profile->address $profile->address2 $profile->city $profile->zip";
     $request->setCustomFieldValue('Initial', $initialA . ' ' . $initialB);
     $request->setCustomFieldValue('ProjectTitle', $proposal->title);
     $request->setCustomFieldValue('ProjectDescription', $proposal->short_description);
     $request->setCustomFieldValue('ProposalId', $proposal->id);
     $request->setCustomFieldValue('TotalGrant', number_format($proposal->total_grant, 2));
-    if($shuftipro) {
+    $request->setCustomFieldValue('Address', $full_address);
+    $request->setCustomFieldValue('Entity', $proposal->name_entity);
+    $request->setCustomFieldValue('From', $proposal->entity_country);
+    if ($shuftipro) {
       $request->setCustomFieldValue('ShuftiId', $shuftipro->reference_id);
     }
     $request->setClientId(config('services.hellosign.client_id'));
@@ -994,9 +1058,9 @@ class Helper {
 
     // OP Signer
     $signature = SignatureGrant::where('role', 'OP')
-                            ->where('email', $user->email)
-                            ->where('proposal_id',  $proposal->id)
-                            ->first();
+      ->where('email', $user->email)
+      ->where('proposal_id',  $proposal->id)
+      ->first();
     if (!$signature) $signature = new SignatureGrant;
     $signature->proposal_id = $proposal->id;
     $signature->name = $user->first_name . ' ' . $user->last_name;
@@ -1004,26 +1068,6 @@ class Helper {
     $signature->role = 'OP';
     $signature->signed = 0;
     $signature->save();
-
-    if (isset($settings['coo_email']) && $settings['coo_email']) {
-      $request->setSigner(
-        'COO',
-        $settings['coo_email'],
-        'COO'
-      );
-      // COO Signer
-      $signature = SignatureGrant::where('role', 'COO')
-                              ->where('email', $settings['coo_email'])
-                              ->where('proposal_id',  $proposal->id)
-                              ->first();
-      if (!$signature) $signature = new SignatureGrant;
-      $signature->proposal_id = $proposal->id;
-      $signature->name = 'COO';
-      $signature->email = $settings['coo_email'];
-      $signature->role = 'COO';
-      $signature->signed = 0;
-      $signature->save();
-    }
 
     if (isset($settings['cfo_email']) && $settings['cfo_email']) {
       $request->setSigner(
@@ -1033,9 +1077,9 @@ class Helper {
       );
       // CFO Signer
       $signature = SignatureGrant::where('role', 'CFO')
-                              ->where('email', $settings['cfo_email'])
-                             ->where('proposal_id',  $proposal->id)
-                              ->first();
+        ->where('email', $settings['cfo_email'])
+        ->where('proposal_id',  $proposal->id)
+        ->first();
       if (!$signature) $signature = new SignatureGrant;
       $signature->proposal_id = $proposal->id;
       $signature->name = 'CFO';
@@ -1053,34 +1097,14 @@ class Helper {
       );
       // board_member email Signer
       $signature = SignatureGrant::where('role', 'BM')
-                              ->where('email', $settings['board_member_email'])
-                             ->where('proposal_id',  $proposal->id)
-                              ->first();
+        ->where('email', $settings['board_member_email'])
+        ->where('proposal_id',  $proposal->id)
+        ->first();
       if (!$signature) $signature = new SignatureGrant;
       $signature->proposal_id = $proposal->id;
       $signature->name = 'BM';
       $signature->email = $settings['board_member_email'];
       $signature->role = 'BM';
-      $signature->signed = 0;
-      $signature->save();
-    }
-
-    if (isset($settings['president_email']) && $settings['president_email']) {
-      $request->setSigner(
-        'BP',
-        $settings['president_email'],
-        'BP'
-      );
-      // board_member email Signer
-      $signature = SignatureGrant::where('role', 'BP')
-                              ->where('email', $settings['president_email'])
-                             ->where('proposal_id',  $proposal->id)
-                              ->first();
-      if (!$signature) $signature = new SignatureGrant;
-      $signature->proposal_id = $proposal->id;
-      $signature->name = 'BP';
-      $signature->email = $settings['president_email'];
-      $signature->role = 'BP';
       $signature->signed = 0;
       $signature->save();
     }
@@ -1098,5 +1122,287 @@ class Helper {
   {
     $count = FinalGrant::where('user_id', $user->id)->where('status', 'active')->count();
     return $count > 0 ? true : false;
+  }
+
+  public static function createMilestoneLog($milestone_id, $email, $user_id, $role, $action)
+  {
+    $milestoneLog = new MilestoneLog();
+    $milestoneLog->milestone_id = $milestone_id;
+    $milestoneLog->email = $email;
+    $milestoneLog->user_id = $user_id;
+    $milestoneLog->role = $role;
+    $milestoneLog->action = $action;
+    $milestoneLog->save();
+  }
+
+  public static function queryGetMilestone($email, $proposalId, $hideCompletedGrants, $startDate, $endDate, $search)
+  {
+    $query =  Milestone::with(['votes', 'milestones'])
+      ->join('proposal', 'proposal.id', '=', 'milestone.proposal_id')
+      ->join('users', 'users.id', '=', 'proposal.user_id')
+      ->leftJoin('milestone_review', 'milestone.id', '=', 'milestone_review.milestone_id')
+      ->leftJoin('final_grant', 'proposal.id', '=', 'final_grant.proposal_id')
+      ->where('final_grant.status', '!=', 'pending')
+      ->where(function ($query) use ($email, $proposalId, $hideCompletedGrants,  $startDate, $endDate, $search) {
+        if ($email) {
+          $query->where(
+            'users.email',
+            '=',
+            $email
+          );
+        }
+        if ($proposalId) {
+          $query->where('milestone.proposal_id', '=', $proposalId);
+        }
+        if ($hideCompletedGrants == 1) {
+          $query->where('final_grant.status', '=', 'active');
+        }
+        if ($startDate) {
+          $query->whereRaw("IF (milestone.submitted_time IS NOT NULL, date(milestone.submitted_time), STR_TO_DATE(milestone.deadline,'%Y-%m-%d')) >= '$startDate' ");
+        }
+        if ($endDate) {
+          $query->whereRaw("IF (milestone.submitted_time IS NOT NULL, date(milestone.submitted_time), STR_TO_DATE(milestone.deadline,'%Y-%m-%d')) <= '$endDate' ");
+        }
+        if ($search) {
+          $query->where('proposal.id', 'like', '%' . $search . '%')
+            ->orWhere('proposal.title', 'like', '%' . $search . '%')
+            ->orWhere('users.email', 'like', '%' . $search . '%');
+        }
+      });
+    return $query;
+  }
+
+  public static function getResultMilestone($milestone)
+  {
+    $milestones = Milestone::where('proposal_id', $milestone->proposal_id)->orderBy('id', 'asc')->get();
+    $total = count($milestones);
+    $position = 1;
+    foreach ($milestones as $key => $value) {
+      if ($value->id == $milestone->id) {
+        $position =  $key + 1;
+        break;
+      }
+    }
+    return [
+      'Milestone' => '  ' . $position . ' / ' . $total,
+      'Milestone Number' => '  ' . $milestone->proposal_id . ' - ' . $position,
+    ];
+  }
+
+  public static function getVoteMilestone($milestone)
+  {
+    $vote = Vote::where('milestone_id', $milestone->id)->orderBy('created_at', 'desc')->first();
+    if ($vote) {
+      if ($vote->result == 'success') {
+        return 'Pass';
+      }
+      if ($vote->result == 'no-quorum') {
+        return 'No quorum';
+      }
+      if ($vote->result == 'fail') {
+        return 'Fail';
+      }
+      return '';
+    }
+    return '';
+  }
+
+  public static function getPointSurvey($place_choice)
+  {
+    switch ($place_choice) {
+      case 1:
+        return 10;
+        break;
+      case 2:
+        return 9;
+        break;
+      case 3:
+        return 8;
+        break;
+      case 4:
+        return 7;
+        break;
+      case 5:
+        return 6;
+        break;
+      case 6:
+        return 5;
+        break;
+      case 7:
+        return 4;
+        break;
+      case 8:
+        return 3;
+        break;
+      case 9:
+        return 2;
+        break;
+      case 10:
+        return 1;
+        break;
+      default:
+        return 0;
+    }
+  }
+
+  public static function checkActiveSurvey($user)
+  {
+    $survey = Survey::where('status', 'active')->first();
+    if(!$survey) {
+      return false;
+    }
+    $checkSurveyResult = SurveyResult::where('survey_id', $survey->id)->where('user_id', $user->id)->first();
+    return $checkSurveyResult ? false : true;
+  }
+
+  public static function createRepHistory($user_id, $value, $rep, $type, $event = null, $proposal_id = null, $vote_id = null, $function_name = null)
+  {
+    $rep_history = new RepHistory();
+    $rep_history->user_id = $user_id;
+    $rep_history->value = $value;
+    $rep_history->rep = $rep;
+    $rep_history->type = $type;
+    $rep_history->event = "$event - proposal: $proposal_id - vote: $vote_id at $function_name";
+    $rep_history->save();
+  }
+
+  public static function getPositionMilestone($milestone)
+  {
+    $milestones = Milestone::where('proposal_id', $milestone->proposal_id)->orderBy('created_at', 'desc')->get();
+    $total = count($milestones);
+    foreach ($milestones as $key => $value) {
+      if ($value->id == $milestone->id) {
+        $position =  $key + 1;
+        break;
+      }
+    }
+    return $position;
+  }
+
+  public static function getNotesFailSubmitReview($data)
+  {
+    $notes = '';
+    if ($data['crdao_acknowledged_project'] == 0 && isset($data['crdao_acknowledged_project_notes'])) {
+      $notes .= $data['crdao_acknowledged_project_notes'] . '<br>';
+    }
+    if ($data['crdao_accepted_pm'] == 0 && isset($data['crdao_accepted_pm_notes'])
+    ) {
+      $notes .= $data['crdao_accepted_pm_notes'] . '<br>';
+    }
+    if ($data['crdao_acknowledged_receipt'] == 0 && isset($data['crdao_acknowledged_receipt_notes'])) {
+      $notes .= $data['crdao_acknowledged_receipt_notes'] . ' <br>';
+    }
+    if ($data['crdao_submitted_review'] == 0 && isset($data['crdao_submitted_review_notes'])) {
+      $notes .= $data['crdao_submitted_review_notes'] . ' <br>';
+    }
+    if ($data['crdao_submitted_subs'] == 0 && isset($data['crdao_submitted_subs_notes '])
+    ) {
+      $notes .= $data['crdao_submitted_subs_notes'] . ' <br>';
+    }
+    if ($data['pm_submitted_evidence'] == 0 && isset($data['pm_submitted_evidence_notes'])) {
+      $notes .= $data['pm_submitted_evidence_notes'] . ' <br>';
+    }
+    if ($data['pm_submitted_admin'] == 0 && isset($data['crdao_acknowledged_project_notes'])) {
+      $notes .= $data['crdao_acknowledged_project_notes'] . ' <br>';
+    }
+    if ($data['pm_submitted_admin'] == 0 && isset($data['pm_submitted_admin_notes'])) {
+      $notes .= $data['pm_submitted_admin_notes'] . ' <br>';
+    }
+    if ($data['pm_verified_corprus'] == 0 && isset($data['pm_verified_corprus_notes'])
+    ) {
+      $notes .= $data['pm_verified_corprus_notes'] . ' <br>';
+    }
+    if ($data['pm_verified_crdao'] == 0 && isset($data['pm_verified_crdao_notes'])
+    ) {
+      $notes .= $data['pm_verified_crdao_notes'] . ' <br>';
+    }
+    if ($data['pm_verified_subs'] == 0 && isset($data['pm_verified_subs_notes'])
+    ) {
+      $notes .= $data['pm_verified_subs_notes'] . ' <br>';
+    }
+    return $notes;
+  }
+
+  public static function checkSendMailTriggerMember($title)
+  {
+    $check = EmailerTriggerMember::where('title', $title)->where('enabled', 1)->count();
+    return $check > 0 ? true : false;
+  }
+
+  public static function getStatusProposal($proposal)
+  {
+    $dos_paid = $proposal->dos_paid;
+    if ($proposal->status == 'payment') {
+      if ($dos_paid) {
+        return 'Payment Clearing';
+      } else {
+        return 'Payment Waiting';
+      }
+    } else if ($proposal->status == 'pending'
+    ) {
+      return 'Pending';
+    } else if ($proposal->status == 'denied'
+    ) {
+      return 'Denied';
+    } else if ($proposal->status == 'completed'
+    ) {
+      return 'Completed';
+    } else if ($proposal->status == 'approved'
+    ) {
+      $vote = Vote::where('proposal_id', $proposal->id)->orderBy('created_at', 'desc')->first();
+      if ($vote) {
+        $type = $vote->type == 'formal' ? "Formal Voting" : "Informal Voting";
+        if ($vote->status == 'active'
+        ) {
+          return "$type - Live";
+        } else if ($vote->result  == 'success') {
+          return "$type - Passed";
+        } else if ($vote->result  == 'no-quorum') {
+          return "$type - No Quorum";
+        } else {
+          return "$type - Failed";
+        }
+      } else {
+        return 'In Discussion';
+      }
+    } else {
+      return '';
+    }
+  }
+
+  public static function createGrantTracking($proposal_id, $event, $key)
+  {
+    $grantTracking = new GrantTracking();
+    $grantTracking->proposal_id = $proposal_id;
+    $grantTracking->event = $event;
+    $grantTracking->key = $key;
+    $grantTracking->save();
+  }
+
+  public static function createMilestoneSubmitHistory($milestone, $user_id)
+  {
+    $milesontePosition = self::getPositionMilestone($milestone);
+    $milestone_history = new MilestoneSubmitHistory();
+    $milestone_history->milestone_id = $milestone->id;
+    $milestone_history->proposal_id = $milestone->proposal_id;
+    $milestone_history->user_id = $user_id;
+    $milestone_history->title = $milestone->title;
+    $milestone_history->time_submit = $milestone->time_submit;
+    $milestone_history->milestone_position = $milesontePosition;
+    $milestone_history->grant = $milestone->grant;
+    $milestone_history->url = $milestone->url;
+    $milestone_history->comment = $milestone->comment;
+    $milestone_history->save();
+  }
+
+  public static function updateRepProfile($user_id, $value)
+  {
+    DB::beginTransaction();
+    $profile = Profile::where('user_id', $user_id)->lockForUpdate()->first();
+    if($profile) {
+      $profile->rep = $profile->rep + $value;
+      $profile->save();
+    }
+    DB::commit();
   }
 }

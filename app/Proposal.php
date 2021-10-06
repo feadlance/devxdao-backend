@@ -55,4 +55,16 @@ class Proposal extends Model
   public function changes() {
     return $this->hasMany('App\ProposalChange', 'proposal_id');
   }
+  
+  public function teams() {
+    return $this->hasMany('App\Team', 'proposal_id');
+  }
+
+  public function surveyRanks() {
+    return $this->hasMany('App\SurveyRank', 'proposal_id');
+  }
+
+  public function milestoneSubmitHistories() {
+    return $this->hasMany('App\MilestoneSubmitHistory', 'proposal_id');
+  }
 }

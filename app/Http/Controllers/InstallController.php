@@ -74,11 +74,11 @@ class InstallController extends Controller
             [
                 'title' => 'VA daily summary',
                 'subject' => 'Daily Voting Associate summary for DEVxDAO',
-                'content' => "Hello VA's <br><br>Please review the following proposals that entered discussions today: <br>[Proposal Tittle Discussions] <br><br> 
+                'content' => "Hello VA's <br><br>Please review the following proposals that entered discussions today: <br>[Proposal Tittle Discussions] <br><br>
                     And also the proposals that have started a vote today. Don?t forget to vote: <br> [Proposal started vote today] <br> <br>
                     Remember, voting is essential to being a Voting Associate. Logging in once a day and voting makes sure you do
                     not lose your status as a Voting Associate and related rewards. <br> <br> Best Regards, <br><br> DxD Admins",
-        
+
             ]
         ];
 
@@ -342,279 +342,324 @@ class InstallController extends Controller
     }
 
     public function install() {
-        if((int)env('INSTALL_ROUTE_ENABLED') == 1) {
-    		/* Setting Roles */
-            $role = Role::where(['name' => 'admin'])->first();
-            if (!$role) Role::create(['name' => 'admin']);
+        /* Setting Roles */
+        $role = Role::where(['name' => 'admin'])->first();
+        if (!$role) Role::create(['name' => 'admin']);
 
-            $role = Role::where(['name' => 'participant'])->first();
-            if (!$role) Role::create(['name' => 'participant']);
+        $role = Role::where(['name' => 'participant'])->first();
+        if (!$role) Role::create(['name' => 'participant']);
 
-            $role = Role::where(['name' => 'member'])->first();
-            if (!$role) Role::create(['name' => 'member']);
+        $role = Role::where(['name' => 'member'])->first();
+        if (!$role) Role::create(['name' => 'member']);
 
-            $role = Role::where(['name' => 'proposer'])->first();
-            if (!$role) Role::create(['name' => 'proposer']);
+        $role = Role::where(['name' => 'proposer'])->first();
+        if (!$role) Role::create(['name' => 'proposer']);
 
-            $role = Role::where(['name' => 'guest'])->first();
-            if (!$role) Role::create(['name' => 'guest']);
+        $role = Role::where(['name' => 'guest'])->first();
+        if (!$role) Role::create(['name' => 'guest']);
 
-            echo "Roles created!<br/>";
+        $role = Role::where(['name' => 'super-admin'])->first();
+        if (!$role) Role::create(['name' => 'super-admin']);
 
-            /* Setting Admin */
-            $user = User::where(['email' => 'ledgerleapllc@gmail.com'])->first();
-            if (!$user) {
-                $user = new User;
-                $user->first_name = 'Ledger';
-                $user->last_name = 'Leap';
-                $user->email = 'ledgerleapllc@gmail.com';
-                $user->password = Hash::make('ledgerleapllc');
-                $user->confirmation_code = 'admin';
-                $user->email_verified = 1;
-                $user->is_admin = 1;
-                $user->save();
-            }
+        echo "Roles created!<br/>";
 
-            if (!$user->hasRole('admin'))
-                $user->assignRole('admin');
-
-            $profile = Profile::where('user_id', $user->id)->first();
-            if (!$profile) {
-                $profile = new Profile;
-                $profile->user_id = $user->id;
-                $profile->company = 'LedgerLeap';
-                $profile->dob = '1989-12-1';
-                $profile->country_citizenship = 'United States';
-                $profile->country_residence = 'United States';
-                $profile->address = 'New York';
-                $profile->city = 'New York';
-                $profile->zip = '10025';
-                $profile->step_review = 1;
-                $profile->step_kyc = 1;
-                $profile->save();
-            }
-            echo "Admin created!<br/>";
-
-            /* Second Admin */
-            $user = User::where(['email' => 'wulf@wulfkaal.com'])->first();
-            if (!$user) {
-                $user = new User;
-                $user->first_name = 'DevDao';
-                $user->last_name = 'Admin';
-                $user->email = 'wulf@wulfkaal.com';
-                $user->password = Hash::make('Devdaopassword1!');
-                $user->confirmation_code = 'admin';
-                $user->email_verified = 1;
-                $user->is_admin = 1;
-                $user->save();
-            }
-
-            if (!$user->hasRole('admin'))
-                $user->assignRole('admin');
-
-            $profile = Profile::where('user_id', $user->id)->first();
-            if (!$profile) {
-                $profile = new Profile;
-                $profile->user_id = $user->id;
-                $profile->company = 'DevDao';
-                $profile->dob = '1989-12-1';
-                $profile->country_citizenship = 'United States';
-                $profile->country_residence = 'United States';
-                $profile->address = 'New York';
-                $profile->city = 'New York';
-                $profile->zip = '10025';
-                $profile->step_review = 1;
-                $profile->step_kyc = 1;
-                $profile->save();
-            }
-            echo "Second Admin created!<br/>";
-
-            /* Third Admin */
-            $user = User::where(['email' => 'timothytlewis@gmail.com'])->first();
-            if (!$user) {
-                $user = new User;
-                $user->first_name = 'Tomothy';
-                $user->last_name = 'Tlewis';
-                $user->email = 'timothytlewis@gmail.com';
-                $user->password = Hash::make('Tester1!');
-                $user->confirmation_code = 'admin';
-                $user->email_verified = 1;
-                $user->is_admin = 1;
-                $user->save();
-            }
-
-            if (!$user->hasRole('admin'))
-                $user->assignRole('admin');
-
-            $profile = Profile::where('user_id', $user->id)->first();
-            if (!$profile) {
-                $profile = new Profile;
-                $profile->user_id = $user->id;
-                $profile->company = 'DevDao';
-                $profile->dob = '1989-12-1';
-                $profile->country_citizenship = 'United States';
-                $profile->country_residence = 'United States';
-                $profile->address = 'New York';
-                $profile->city = 'New York';
-                $profile->zip = '10025';
-                $profile->step_review = 1;
-                $profile->step_kyc = 1;
-                $profile->save();
-            }
-            echo "Third Admin created!<br/>";
-
-            /* Fourth Admin */
-            $user = User::where(['email' => 'timothy.messer@emergingte.ch'])->first();
-            if (!$user) {
-                $user = new User;
-                $user->first_name = 'Timothy';
-                $user->last_name = 'Messer';
-                $user->email = 'timothy.messer@emergingte.ch';
-                $user->password = Hash::make('Decentralized2@');
-                $user->confirmation_code = 'admin';
-                $user->email_verified = 1;
-                $user->is_admin = 1;
-                $user->save();
-            }
-
-            if (!$user->hasRole('admin'))
-                $user->assignRole('admin');
-
-            $profile = Profile::where('user_id', $user->id)->first();
-            if (!$profile) {
-                $profile = new Profile;
-                $profile->user_id = $user->id;
-                $profile->company = 'DevDao';
-                $profile->dob = '1989-12-1';
-                $profile->country_citizenship = 'United States';
-                $profile->country_residence = 'United States';
-                $profile->address = 'New York';
-                $profile->city = 'New York';
-                $profile->zip = '10025';
-                $profile->step_review = 1;
-                $profile->step_kyc = 1;
-                $profile->save();
-            }
-            echo "Fourth Admin created!<br/>";
-
-            /* Fifth Admin */
-            $user = User::where(['email' => 'hhoweconsulting@gmail.com'])->first();
-            if (!$user) {
-                $user = new User;
-                $user->first_name = 'Halyley';
-                $user->last_name = 'Howe';
-                $user->email = 'hhoweconsulting@gmail.com';
-                $user->password = Hash::make('HayleyHadmin2@');
-                $user->confirmation_code = 'admin';
-                $user->email_verified = 1;
-                $user->is_admin = 1;
-                $user->save();
-            }
-
-            if (!$user->hasRole('admin'))
-                $user->assignRole('admin');
-
-            $profile = Profile::where('user_id', $user->id)->first();
-            if (!$profile) {
-                $profile = new Profile;
-                $profile->user_id = $user->id;
-                $profile->company = 'DevDao';
-                $profile->dob = '1989-12-1';
-                $profile->country_citizenship = 'United States';
-                $profile->country_residence = 'United States';
-                $profile->address = 'New York';
-                $profile->city = 'New York';
-                $profile->zip = '10025';
-                $profile->step_review = 1;
-                $profile->step_kyc = 1;
-                $profile->save();
-            }
-            echo "Fifth Admin created!<br/>";
-
-            /* Fix Forum Name */
-            $users = User::get();
-            foreach ($users as $user) {
-                $profile = Profile::where('user_id', $user->id)->first();
-
-                if ($profile && !$profile->forum_name) {
-                    $forum_name = $user->first_name . '_' . $user->id;
-                    $profile->forum_name = $forum_name;
-                    $profile->save();
-                }
-            }
-            echo "Forum Name created!<br/>";
-
-            /* Setting */
-            $names = [
-                'coo_email' => '',
-                'cfo_email' => '',
-                'board_member_email' => '',
-                'president_email' => '',
-                'time_before_op_do' => '24',
-                'time_unit_before_op_do' => 'hour',
-                'can_op_start_informal' => 'yes',
-                'time_before_op_informal' => '7',
-                'time_unit_before_op_informal' => 'day',
-                'time_before_op_informal_simple' => '7',
-                'time_unit_before_op_informal_simple' => 'day',
-                'time_informal' => '48',
-                'time_unit_informal' => 'hour',
-                'time_formal' => '48',
-                'time_unit_formal' => 'hour',
-                'time_simple' => '48',
-                'time_unit_simple' => 'hour',
-                'time_milestone' => '48',
-                'time_unit_milestone' => 'hour',
-                'dos_fee_amount' => '100',
-                'btc_address' => 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
-                'eth_address' => '0x06cf1395611c3789d4cbb7a6ce927503d4a9d22f',
-                'rep_amount' => '50',
-                'minted_ratio' => '0.5',
-                'op_percentage' => '50',
-                'pass_rate' => '60',
-                'quorum_rate' => '50',
-                'pass_rate_simple' => '60',
-                'quorum_rate_simple' => '50',
-                'pass_rate_milestone' => '60',
-                'quorum_rate_milestone' => '50',
-                'need_to_approve' => 'yes',
-                'autostart_formal_votes' => 'yes',
-                'autoactivate_grants' => 'yes',
-            ];
-
-            foreach ($names as $name => $value) {
-                $setting = Setting::where('name', $name)->first();
-                if (!$setting) {
-                    $setting = new Setting;
-                    $setting->name = $name;
-                    $setting->value = $value;
-                    $setting->save();
-                }
-            }
-
-            echo "Setting created<br/>";
-
-            // Members
-            $emails = [
-                'charles+testfds@ledgerleap.com',
-                'charles+testfdsf@ledgerleap.com',
-                'charles+testfdskhfdsfdhs@ledgerleap.com',
-                'sam+dxdtest6@ledgerleap.com',
-                'sam+dxdtest8@ledgerleap.com',
-                'jasoncoellox1@gmail.com'
-            ];
-
-            foreach ($emails as $email) {
-                $user = User::where('email', $email)->first();
-
-                if ($user) {
-                    $user->assignRole('member');
-                    $user->is_member = 1;
-                    $user->save();
-                }
-            }
-        } else {
-            echo 'disabled';
+        /* Setting Admin */
+        $user = User::where(['email' => 'ledgerleapllc@gmail.com'])->first();
+        if (!$user) {
+            $user = new User;
+            $user->first_name = 'Ledger';
+            $user->last_name = 'Leap';
+            $user->email = 'ledgerleapllc@gmail.com';
+            $random_pw = Str::random(10);
+            Log::info($user->email.' password set: '.$random_pw);
+            $user->password = Hash::make($random_pw);
+            $user->confirmation_code = 'admin';
+            $user->email_verified = 1;
+            $user->is_admin = 1;
+            $user->save();
         }
-	}
+
+        if (!$user->hasRole('admin'))
+            $user->assignRole('admin');
+
+        $profile = Profile::where('user_id', $user->id)->first();
+        if (!$profile) {
+            $profile = new Profile;
+            $profile->user_id = $user->id;
+            $profile->company = 'LedgerLeap';
+            $profile->dob = '1989-12-1';
+            $profile->country_citizenship = 'United States';
+            $profile->country_residence = 'United States';
+            $profile->address = 'New York';
+            $profile->city = 'New York';
+            $profile->zip = '10025';
+            $profile->step_review = 1;
+            $profile->step_kyc = 1;
+            $profile->save();
+        }
+        echo "Admin created!<br/>";
+
+        /* Second Admin */
+        $user = User::where(['email' => 'wulf@wulfkaal.com'])->first();
+        if (!$user) {
+            $user = new User;
+            $user->first_name = 'DevDao';
+            $user->last_name = 'Admin';
+            $user->email = 'wulf@wulfkaal.com';
+            $random_pw = Str::random(10);
+            Log::info($user->email.' password set: '.$random_pw);
+            $user->password = Hash::make($random_pw);
+            $user->confirmation_code = 'admin';
+            $user->email_verified = 1;
+            $user->is_admin = 1;
+            $user->save();
+        }
+
+        if (!$user->hasRole('admin'))
+            $user->assignRole('admin');
+
+        $profile = Profile::where('user_id', $user->id)->first();
+        if (!$profile) {
+            $profile = new Profile;
+            $profile->user_id = $user->id;
+            $profile->company = 'DevDao';
+            $profile->dob = '1989-12-1';
+            $profile->country_citizenship = 'United States';
+            $profile->country_residence = 'United States';
+            $profile->address = 'New York';
+            $profile->city = 'New York';
+            $profile->zip = '10025';
+            $profile->step_review = 1;
+            $profile->step_kyc = 1;
+            $profile->save();
+        }
+        echo "Second Admin created!<br/>";
+
+        /* Third Admin */
+        $user = User::where(['email' => 'timothytlewis@gmail.com'])->first();
+        if (!$user) {
+            $user = new User;
+            $user->first_name = 'Tomothy';
+            $user->last_name = 'Tlewis';
+            $user->email = 'timothytlewis@gmail.com';
+            $random_pw = Str::random(10);
+            Log::info($user->email.' password set: '.$random_pw);
+            $user->password = Hash::make($random_pw);
+            $user->confirmation_code = 'admin';
+            $user->email_verified = 1;
+            $user->is_admin = 1;
+            $user->save();
+        }
+
+        if (!$user->hasRole('admin'))
+            $user->assignRole('admin');
+
+        $profile = Profile::where('user_id', $user->id)->first();
+        if (!$profile) {
+            $profile = new Profile;
+            $profile->user_id = $user->id;
+            $profile->company = 'DevDao';
+            $profile->dob = '1989-12-1';
+            $profile->country_citizenship = 'United States';
+            $profile->country_residence = 'United States';
+            $profile->address = 'New York';
+            $profile->city = 'New York';
+            $profile->zip = '10025';
+            $profile->step_review = 1;
+            $profile->step_kyc = 1;
+            $profile->save();
+        }
+        echo "Third Admin created!<br/>";
+
+        /* Fourth Admin */
+        $user = User::where(['email' => 'timothy.messer@emergingte.ch'])->first();
+        if (!$user) {
+            $user = new User;
+            $user->first_name = 'Timothy';
+            $user->last_name = 'Messer';
+            $user->email = 'timothy.messer@emergingte.ch';
+            $random_pw = Str::random(10);
+            Log::info($user->email.' password set: '.$random_pw);
+            $user->password = Hash::make($random_pw);
+            $user->confirmation_code = 'admin';
+            $user->email_verified = 1;
+            $user->is_admin = 1;
+            $user->save();
+        }
+
+        if (!$user->hasRole('admin'))
+            $user->assignRole('admin');
+
+        $profile = Profile::where('user_id', $user->id)->first();
+        if (!$profile) {
+            $profile = new Profile;
+            $profile->user_id = $user->id;
+            $profile->company = 'DevDao';
+            $profile->dob = '1989-12-1';
+            $profile->country_citizenship = 'United States';
+            $profile->country_residence = 'United States';
+            $profile->address = 'New York';
+            $profile->city = 'New York';
+            $profile->zip = '10025';
+            $profile->step_review = 1;
+            $profile->step_kyc = 1;
+            $profile->save();
+        }
+        echo "Fourth Admin created!<br/>";
+
+        /* Fifth Admin */
+        $user = User::where(['email' => 'hhoweconsulting@gmail.com'])->first();
+        if (!$user) {
+            $user = new User;
+            $user->first_name = 'Halyley';
+            $user->last_name = 'Howe';
+            $user->email = 'hhoweconsulting@gmail.com';
+            $random_pw = Str::random(10);
+            Log::info($user->email.' password set: '.$random_pw);
+            $user->password = Hash::make($random_pw);
+            $user->confirmation_code = 'admin';
+            $user->email_verified = 1;
+            $user->is_admin = 1;
+            $user->save();
+        }
+
+        if (!$user->hasRole('admin'))
+            $user->assignRole('admin');
+
+        $profile = Profile::where('user_id', $user->id)->first();
+        if (!$profile) {
+            $profile = new Profile;
+            $profile->user_id = $user->id;
+            $profile->company = 'DevDao';
+            $profile->dob = '1989-12-1';
+            $profile->country_citizenship = 'United States';
+            $profile->country_residence = 'United States';
+            $profile->address = 'New York';
+            $profile->city = 'New York';
+            $profile->zip = '10025';
+            $profile->step_review = 1;
+            $profile->step_kyc = 1;
+            $profile->save();
+        }
+        echo "Fifth Admin created!<br/>";
+
+        /* Sixth Admin */
+        $user = User::where(['email' => 'raphael.baumann@emergingte.ch'])->first();
+        if (!$user) {
+            $user = new User;
+            $user->first_name = 'Raphael';
+            $user->last_name = 'Baumann';
+            $user->email = 'raphael.baumann@emergingte.ch';
+            $random_pw = Str::random(10);
+            Log::info($user->email.' password set: '.$random_pw);
+            $user->password = Hash::make($random_pw);
+            $user->confirmation_code = 'admin';
+            $user->email_verified = 1;
+            $user->is_admin = 1;
+            $user->save();
+        }
+
+        if (!$user->hasRole('admin'))
+            $user->assignRole('admin');
+
+        $profile = Profile::where('user_id', $user->id)->first();
+        if (!$profile) {
+            $profile = new Profile;
+            $profile->user_id = $user->id;
+            $profile->company = 'DevDao';
+            $profile->dob = '1989-12-1';
+            $profile->country_citizenship = 'United States';
+            $profile->country_residence = 'United States';
+            $profile->address = 'New York';
+            $profile->city = 'New York';
+            $profile->zip = '10025';
+            $profile->step_review = 1;
+            $profile->step_kyc = 1;
+            $profile->save();
+        }
+        echo "Sixth Admin created!<br/>";
+
+        /* Fix Forum Name */
+        $users = User::get();
+        foreach ($users as $user) {
+            $profile = Profile::where('user_id', $user->id)->first();
+
+            if ($profile && !$profile->forum_name) {
+                $forum_name = $user->first_name . '_' . $user->id;
+                $profile->forum_name = $forum_name;
+                $profile->save();
+            }
+        }
+        echo "Forum Name created!<br/>";
+
+        /* Setting */
+        $names = [
+            'coo_email' => '',
+            'cfo_email' => '',
+            'board_member_email' => '',
+            'president_email' => '',
+            'time_before_op_do' => '24',
+            'time_unit_before_op_do' => 'hour',
+            'can_op_start_informal' => 'yes',
+            'time_before_op_informal' => '7',
+            'time_unit_before_op_informal' => 'day',
+            'time_before_op_informal_simple' => '7',
+            'time_unit_before_op_informal_simple' => 'day',
+            'time_informal' => '48',
+            'time_unit_informal' => 'hour',
+            'time_formal' => '48',
+            'time_unit_formal' => 'hour',
+            'time_simple' => '48',
+            'time_unit_simple' => 'hour',
+            'time_milestone' => '48',
+            'time_unit_milestone' => 'hour',
+            'dos_fee_amount' => '100',
+            'btc_address' => 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
+            'eth_address' => '0x06cf1395611c3789d4cbb7a6ce927503d4a9d22f',
+            'rep_amount' => '50',
+            'minted_ratio' => '0.5',
+            'op_percentage' => '50',
+            'pass_rate' => '60',
+            'quorum_rate' => '50',
+            'pass_rate_simple' => '60',
+            'quorum_rate_simple' => '50',
+            'pass_rate_milestone' => '60',
+            'quorum_rate_milestone' => '50',
+            'need_to_approve' => 'yes',
+            'autostart_formal_votes' => 'yes',
+            'autoactivate_grants' => 'yes',
+        ];
+
+        foreach ($names as $name => $value) {
+            $setting = Setting::where('name', $name)->first();
+            if (!$setting) {
+                $setting = new Setting;
+                $setting->name = $name;
+                $setting->value = $value;
+                $setting->save();
+            }
+        }
+
+        echo "Setting created<br/>";
+
+        // Members
+        $emails = [
+            'charles+testfds@ledgerleap.com',
+            'charles+testfdsf@ledgerleap.com',
+            'charles+testfdskhfdsfdhs@ledgerleap.com',
+            'sam+dxdtest6@ledgerleap.com',
+            'sam+dxdtest8@ledgerleap.com',
+            'jasoncoellox1@gmail.com'
+        ];
+
+        foreach ($emails as $email) {
+            $user = User::where('email', $email)->first();
+
+            if ($user) {
+                $user->assignRole('member');
+                $user->is_member = 1;
+                $user->save();
+            }
+        }
+    }
 }

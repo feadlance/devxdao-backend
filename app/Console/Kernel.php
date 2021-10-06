@@ -57,6 +57,22 @@ class Kernel extends ConsoleKernel
             ->dailyAt('15:00')
             ->runInBackground();
             // ->withoutOverlapping();
+        $schedule->command('admin:report')
+            ->dailyAt('04:00')
+            ->runInBackground();
+            // ->withoutOverlapping();
+        $schedule->command('survey:check')
+            ->everyMinute()
+            ->runInBackground();
+            // ->withoutOverlapping();
+        $schedule->command('total-rep:statistic')
+            ->lastDayOfMonth('11:00')
+            ->runInBackground();
+            // ->withoutOverlapping();
+        $schedule->command('daily-reputation')
+            ->dailyAt('07:00')
+            ->runInBackground();
+            // ->withoutOverlapping();
     }
 
     /**
