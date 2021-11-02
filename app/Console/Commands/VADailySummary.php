@@ -106,6 +106,9 @@ class VADailySummary extends Command
             } else if ($vote->content_type == 'simple') {
                 $quorumRate = (float) $settings['quorum_rate_simple'];
                 $timeLeft = Carbon::parse($vote->created_at)->addMinute($minsSimple);
+            } else if ($vote->content_type == 'admin-grant') {
+                $quorumRate = (float) $settings['quorum_rate_simple'];
+                $timeLeft = Carbon::parse($vote->created_at)->addMinute($minsSimple);
             }
             if ($vote->type == 'informal' && $timeLeft <= $tommorow) {
                 $minMembers = $totalMembersInfomal * $quorumRate / 100;

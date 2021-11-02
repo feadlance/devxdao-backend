@@ -2,11 +2,12 @@
 
 namespace App\Exports;
 
+use Carbon\Carbon;
 use Maatwebsite\Excel\Concerns\FromCollection;
 use Maatwebsite\Excel\Concerns\WithHeadings;
 use Maatwebsite\Excel\Concerns\WithMapping;
 
-class SurveyWinExport implements FromCollection, WithHeadings, WithMapping
+class SurveyDownvoteExport implements FromCollection,  WithHeadings, WithMapping
 {
     public function __construct($query)
     {
@@ -25,13 +26,14 @@ class SurveyWinExport implements FromCollection, WithHeadings, WithMapping
     public function map($proposal): array
     {
         $status = $proposal->status;
+        $dowvoted = $proposal->is_approved && $proposal->downvote_approved_at ? 'Downvoted' . PHP_EOL . 'approved|' . Carbon::parse($proposal->downvote_approved_at)->format('m-d-Y') : 'Dowvoted';
         return [
             ' ' . $proposal->end_time->format('m-d-Y'),
             $proposal->survey_id,
             $proposal->rank,
             $proposal->id,
             $proposal->title,
-            $status['label'],
+            $proposal->is_approved ? $dowvoted : $status['label'],
         ];
     }
     public function headings(): array

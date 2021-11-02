@@ -40,14 +40,18 @@ use App\Exports\ProposalExport;
 use App\FinalGrant;
 use App\GrantTracking;
 use App\Signature;
+use App\Exports\VoteResultExport;
 
 use App\Mail\TwoFA;
 use App\Mail\AdminAlert;
 use App\Mail\UserAlert;
 use App\MilestoneReview;
+use App\ShuftiproTemp;
 use App\SignatureGrant;
 use App\Survey;
+use App\SurveyDownVoteRank;
 use App\SurveyRank;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Maatwebsite\Excel\Facades\Excel;
 use PDF;
@@ -81,8 +85,8 @@ class SharedController extends Controller
 			$signature_request_id = $data['signature_request']['signature_request_id'];
 			$filepath = 'hellosign/hellosign_' . $signature_request_id . '.pdf';
 
-			$client = new \HelloSign\Client(config('services.hellosign.api_key'));
-			$client->getFiles($signature_request_id, $filepath, \HelloSign\SignatureRequest::FILE_TYPE_PDF);
+			// $client = new \HelloSign\Client(config('services.hellosign.api_key'));
+			// $client->getFiles($signature_request_id, $filepath, \HelloSign\SignatureRequest::FILE_TYPE_PDF);
 
 			$profile = Profile::where('signature_request_id', $signature_request_id)->first();
 			$proposal = Proposal::where('signature_request_id', $signature_request_id)->first();
@@ -115,12 +119,22 @@ class SharedController extends Controller
 					}
 				}
 			} else if ($proposalGrant) {
-				$proposal->grant_hellosign_form = $filepath;
-				$proposal->save();
-				$signObject = SignatureGrant::where('proposal_id', $proposal->id)->where('signed', 0)->first();
+				$proposalGrant->grant_hellosign_form = $filepath;
+				$proposalGrant->save();
+				$signObject = SignatureGrant::where('proposal_id', $proposalGrant->id)->where('signed', 0)->first();
 				if ($signObject) {
 					$signObject->signed = 1;
 					$signObject->save();
+
+					$finalGrant = FinalGrant::where('proposal_id', $proposalGrant->id)->first();
+					Helper::createGrantLogging([
+						'proposal_id' => $proposalGrant->id,
+						'final_grant_id' => $finalGrant->id,
+						'user_id' => $signObject->user_id,
+						'email' => $signObject->email,
+						'role' => $signObject->role,
+						'type' => 'signed',
+					]);
 				}
 			} else {
 				$proposal = Proposal::where('membership_signature_request_id', $signature_request_id)->first();
@@ -194,6 +208,7 @@ class SharedController extends Controller
 				$proposalGrant->grant_hellosign_form = $filepath;
 				$proposalGrant->save();
 				$signatures = $signature_request['signatures'];
+				$finalGrant = FinalGrant::where('proposal_id', $proposalGrant->id)->first();
 
 				if (is_array($signatures)) {
 					foreach ($signatures as $signature) {
@@ -207,6 +222,15 @@ class SharedController extends Controller
 								$signObject->name = $signature['signer_name'];
 								$signObject->signed = 1;
 								$signObject->save();
+
+								Helper::createGrantLogging([
+									'proposal_id' => $proposalGrant->id,
+									'final_grant_id' => $finalGrant->id,
+									'user_id' => $signObject->user_id,
+									'email' => $signObject->email,
+									'role' => $signObject->role,
+									'type' => 'signed',
+								]);
 							}
 						}
 					}
@@ -215,10 +239,18 @@ class SharedController extends Controller
 					$signatureGrantsSigned = SignatureGrant::where('proposal_id', $proposalGrant->id)->where('signed', 1)->count();
 					$signatureGrantsTotal = SignatureGrant::where('proposal_id', $proposalGrant->id)->count();
 					if ($signatureGrantsSigned == $signatureGrantsTotal) {
-						$finalGrant = FinalGrant::where('proposal_id', $proposalGrant->id)->first();
 						if ($finalGrant && $finalGrant->status == "pending") {
 							$finalGrant->status = 'active';
 							$finalGrant->save();
+
+							Helper::createGrantLogging([
+								'proposal_id' => $proposalGrant->id,
+								'final_grant_id' => $finalGrant->id,
+								'user_id' => null,
+								'email' => null,
+								'role' => 'system',
+								'type' => 'completed',
+							]);
 						}
 					}
 				}
@@ -329,7 +361,9 @@ class SharedController extends Controller
 					->where('id', $proposalId)
 					->first();
 
-				if ($proposal) {
+				$vote = Vote::where('proposal_id', $proposalId)->where('type', 'formal')
+					->where('result', 'success')->where('content_type', 'grant')->first();
+				if ($proposal && $vote) {
 					return [
 						'success' => true,
 						'proposal' => $proposal
@@ -613,7 +647,7 @@ class SharedController extends Controller
 			$proposal = Proposal::find($proposalId);
 
 			// Proposal Check
-			if (!$proposal || $proposal->type != "simple") {
+			if (!$proposal || !in_array($proposal->type, ["simple", "admin-grant"])) {
 				return [
 					'success' => false,
 					'message' => 'Invalid proposal'
@@ -808,6 +842,7 @@ class SharedController extends Controller
 			Grant::where('proposal_id', $proposalId)->delete();
 			Milestone::where('proposal_id', $proposalId)->delete();
 			Citation::where('proposal_id', $proposalId)->delete();
+			Citation::where('rep_proposal_id', $proposalId)->delete();
 			OnBoarding::where('proposal_id', $proposalId)->delete();
 
 			FinalGrant::where('proposal_id', $proposalId)->delete();
@@ -1332,12 +1367,94 @@ class SharedController extends Controller
 				}
 			}
 
-			if ($proposal->pdf) {
+			$pdf = PDF::loadView('proposal_pdf', compact('proposal'));
+			$fullpath = 'pdf/proposal/proposal_' . $proposal->id . '.pdf';
+			Storage::disk('local')->put($fullpath, $pdf->output());
+			$url = Storage::disk('local')->url($fullpath);
+			$proposal->pdf = $url;
+			$proposal->save();
 
-				$pdf = PDF::loadView('proposal_pdf', compact('proposal'));
-				Storage::disk('local')->put(substr($proposal->pdf, 9), $pdf->output());
+			return [
+				'success' => true,
+				'proposal' => $proposal
+			];
+		}
+
+		return ['success' => false];
+	}
+
+	// update grant Proposal
+	public function updateAdminGrantProposal($proposalId, Request $request) {
+		$user = Auth::user();
+
+		if ($user) {
+			// Validator
+			$validator = Validator::make($request->all(), [
+			'title' => 'required',
+			'total_grant' => 'required',
+			'things_delivered' => 'required',
+			'delivered_at' => 'required',
+			]);
+			if ($validator->fails()) {
+				return [
+					'success' => false,
+					'message' => 'Provide all the necessary information'
+				];
 			}
 
+			$title = $request->get('title');
+			$total_grant = $request->get('total_grant');
+			$things_delivered = $request->get('things_delivered');
+			$delivered_at = $request->get('delivered_at');
+			$extra_notes = $request->get('extra_notes');
+
+			$proposal = Proposal::where('id', $proposalId)->where('type', 'admin-grant')->first();
+			if (!$proposal) {
+				return [
+					'success' => false,
+					'message' => 'Can not find proposal'
+				];
+			}
+			if ($user->hasRole('admin')) {
+				// Admin can only edit pending proposal
+				if ($proposal->status != 'pending' && $proposal->status != 'approved') {
+					return [
+						'success' => false,
+						'message' => 'Proposal is not in pending or approved'
+					];
+				}
+			} else {
+				// OP can only edit proposal
+				if ($proposal->user_id != $user->id) {
+					return [
+						'success' => false,
+						'message' => 'Only OP can edit proposal'
+					];
+				}
+			}
+			$otherProposal = Proposal::where('title', $title)
+			->where('id', '!=', $proposalId)
+			->first();
+
+			if ($otherProposal) {
+				return [
+					'success' => true,
+					'message' => "Another proposal with the same title already exists"
+				];
+			}
+			// update Proposal
+			$proposal->title = $title;
+			$proposal->total_grant = $total_grant;
+			$proposal->things_delivered = $things_delivered;
+			$proposal->delivered_at = $delivered_at;
+			$proposal->extra_notes = $extra_notes;
+			$proposal->save();
+
+			$pdf = PDF::loadView('proposal_pdf', compact('proposal'));
+			$fullpath = 'pdf/proposal/proposal_' . $proposal->id . '.pdf';
+			Storage::disk('local')->put($fullpath, $pdf->output());
+			$url = Storage::disk('local')->url($fullpath);
+			$proposal->pdf = $url;
 			$proposal->save();
 
 			return [
@@ -1424,9 +1541,10 @@ class SharedController extends Controller
 				'crypto',
 				'grants',
 				'milestones',
-				'milestones.milestoneCheckList',
+				'milestones.milestoneReview',
 				'milestones.milestoneReview.user',
-				'milestones.milestoneSubmitHistories',
+				'milestones.milestoneReview.milestoneCheckList',
+				'milestones.milestoneReview.milestoneSubmitHistory',
 				'citations',
 				'citations.repProposal',
 				'citations.repProposal.user',
@@ -1436,8 +1554,12 @@ class SharedController extends Controller
 				'votes',
 				'onboarding',
 				'surveyRanks.survey',
+				'surveyDownVoteRanks.survey',
 			])
 			->with(['surveyRanks' => function ($q) {
+				$q->orderBy('rank', 'desc');
+			}])
+			->with(['surveyDownVoteRanks' => function ($q) {
 				$q->orderBy('rank', 'desc');
 			}])
 			->has('user')
@@ -1504,6 +1626,13 @@ class SharedController extends Controller
 						->get();
 				}
 			}
+
+			$proposal->loser = $proposal->surveyDownVoteRanks->first(function ($value, $key) {
+				return $value->is_winner && $value->is_approved;
+			});
+			$proposal->winner = $proposal->surveyRanks->first(function ($value, $key) {
+				return $value->is_winner;
+			});
 
 			return [
 				'success' => true,
@@ -1616,7 +1745,7 @@ class SharedController extends Controller
 		$start = $limit * ($page_id - 1);
 
 		if ($user->hasRole('admin')) {
-			$proposals = FinalGrant::with(['proposal', 'proposal.user', 'proposal.milestones', 'user', 'signtureGrants']);
+			$proposals = FinalGrant::with(['proposal', 'proposal.user', 'proposal.milestones', 'proposal.milestones.votes', 'proposal.milestones.milestoneReview', 'user', 'signtureGrants', 'grantLogs']);
 			if ($status == 'pending') {
 				$proposals = $proposals->where('final_grant.status', $status);
 			} else {
@@ -1640,10 +1769,9 @@ class SharedController extends Controller
 			foreach ($proposals as $proposal) {
 				$in_review = 0;
 				$milestones = $proposal->proposal->milestones;
-				$milestones_submitted = $proposal->milestones_submitted;
-				$milestone =  $milestones[$milestones_submitted] ?? null;
-				if ($milestone) {
-					$milestoneReview = MilestoneReview::where('milestone_id', $milestone->id)->whereIn('status', ['pending', 'active'])->first();
+				if (count($milestones)) {
+					$milestone_ids = $milestones->pluck('id')->toArray();
+					$milestoneReview = MilestoneReview::whereIn('milestone_id', $milestone_ids)->whereIn('status', ['pending', 'active'])->first();
 					if($milestoneReview)  {
 						$in_review = 1;
 					}
@@ -1651,7 +1779,7 @@ class SharedController extends Controller
 				$proposal->in_review = $in_review;
 			}
 		} else {
-			$proposals = FinalGrant::with(['proposal', 'proposal.user', 'proposal.milestones', 'proposal.votes', 'user', 'signtureGrants'])
+			$proposals = FinalGrant::with(['proposal', 'proposal.user', 'proposal.milestones', 'proposal.milestones.votes', 'proposal.milestones.milestoneReview', 'proposal.votes', 'user', 'signtureGrants'])
 			->has('proposal.milestones')
 			->has('proposal.votes')
 			->has('user')
@@ -1666,10 +1794,9 @@ class SharedController extends Controller
 			foreach ($proposals as $proposal) {
 				$in_review = 0;
 				$milestones = $proposal->proposal->milestones;
-				$milestones_submitted = $proposal->milestones_submitted;
-				$milestone =  $milestones[$milestones_submitted] ?? null;
-				if ($milestone) {
-					$milestoneReview = MilestoneReview::where('milestone_id', $milestone->id)->whereIn('status', ['pending', 'active'])->first();
+				if (count($milestones)) {
+					$milestone_ids = $milestones->pluck('id')->toArray();
+					$milestoneReview = MilestoneReview::whereIn('milestone_id', $milestone_ids)->whereIn('status', ['pending', 'active'])->first();
 					if($milestoneReview)  {
 						$in_review = 1;
 					}
@@ -1892,6 +2019,8 @@ class SharedController extends Controller
 					}
 				}
 			}
+
+			$proposal->euros = $proposal->total_grant;
 		}
 
 		return [
@@ -2038,6 +2167,7 @@ class SharedController extends Controller
 		$sort_key = $sort_direction = $search = '';
 		$page_id = 0;
 		$ignore_previous_winner = $request->ignore_previous_winner;
+		$ignore_previous_loser = $request->ignore_previous_loser;
 		$data = $request->all();
 		if ($data && is_array($data)) extract($data);
 
@@ -2058,7 +2188,7 @@ class SharedController extends Controller
 					->orderBy('rank', 'desc');
 				}])
 				->doesntHave('votes')
-				->where(function ($query) use ($search, $is_winner, $ignore_previous_winner) {
+				->where(function ($query) use ($search, $is_winner, $ignore_previous_winner, $ignore_previous_loser) {
 					if ($search) {
 						$query->where('proposal.title', 'like', '%' . $search . '%')
 							->orWhere('proposal.member_reason', 'like', '%' . $search . '%');
@@ -2070,7 +2200,10 @@ class SharedController extends Controller
 					}
 					if($ignore_previous_winner == 1) {
 						$survey_rank_ids = SurveyRank::where('is_winner', 1)->pluck('proposal_id');
-						$query->whereNotIn('proposal.id', $survey_rank_ids->toArray());
+						$survey_downvote_rank_ids = SurveyDownVoteRank::where('is_winner', 1)
+							->where('is_approved', 1)->pluck('proposal_id');
+						$query->whereNotIn('proposal.id', $survey_rank_ids->toArray())
+							->whereNotIn('proposal.id', $survey_downvote_rank_ids->toArray());
 					}
 				})
 				->orderBy($sort_key, $sort_direction)
@@ -2272,7 +2405,7 @@ class SharedController extends Controller
 						'vote.*',
 						'vote_result.type as vote_result_type',
 						'vote_result.value as vote_result_value',
-						DB::raw('(CASE WHEN vote.content_type = \'grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros')
+						DB::raw('(CASE WHEN vote.content_type = \'grant\' OR proposal.type = \'admin-grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros')
 					])
 					->orderBy($sort_key, $sort_direction)
 					->groupBy('vote.id')
@@ -2301,7 +2434,7 @@ class SharedController extends Controller
 						'users.last_name',
 						'users.id as user_id',
 						'vote.*',
-						DB::raw('(CASE WHEN vote.content_type = \'grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros')
+						DB::raw('(CASE WHEN vote.content_type = \'grant\' OR proposal.type = \'admin-grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros')
 					])
 					->orderBy($sort_key, $sort_direction)
 					->offset($start)
@@ -2395,13 +2528,18 @@ class SharedController extends Controller
 						'vote_result.type as vote_result_type',
 						'vote_result.value as vote_result_value',
 						'vote2.result_count as total_member',
-						DB::raw('(CASE WHEN vote.content_type = \'grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
+						DB::raw('(CASE WHEN vote.content_type = \'grant\' OR proposal.type = \'admin-grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
 						DB::raw("(CASE WHEN vote.content_type = 'grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsFormal MINUTE, current_timestamp())  
 							WHEN vote.content_type = 'milestone' THEN TIMEDIFF(vote.created_at + INTERVAL $minsMileStone MINUTE, current_timestamp())
 							WHEN vote.content_type = 'simple' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
+							WHEN vote.content_type = 'admin-grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
 							ELSE null END ) AS timeLeft")
 
-					])
+					]);
+					if($sort_key == 'vote_result_type' &&  $sort_direction == 'asc' ) {
+						$votes = $votes->orderByRaw('-vote_result.type ASC');
+					}
+					$votes = $votes
 					->orderBy($sort_key, $sort_direction)
 					->groupBy('vote.id')
 					->offset($start)
@@ -2435,10 +2573,11 @@ class SharedController extends Controller
 						'users.id as user_id',
 						'vote.*',
 						// 'vote2.result_count as total_member',
-						DB::raw('(CASE WHEN vote.content_type = \'grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
+						DB::raw('(CASE WHEN vote.content_type = \'grant\' OR proposal.type = \'admin-grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
 						DB::raw("(CASE WHEN vote.content_type = 'grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsFormal MINUTE, current_timestamp())  
 							WHEN vote.content_type = 'milestone' THEN TIMEDIFF(vote.created_at + INTERVAL $minsMileStone MINUTE, current_timestamp())
 							WHEN vote.content_type = 'simple' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
+							WHEN vote.content_type = 'admin-grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
 							ELSE null END ) AS timeLeft")
 
 					])
@@ -2551,12 +2690,17 @@ class SharedController extends Controller
 						'vote.*',
 						'vote_result.type as vote_result_type',
 						'vote_result.value as vote_result_value',
-						DB::raw('(CASE WHEN vote.content_type = \'grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
+						DB::raw('(CASE WHEN vote.content_type = \'grant\' OR proposal.type = \'admin-grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
 						DB::raw("(CASE WHEN vote.content_type = 'grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsInformal MINUTE, current_timestamp())  
 							WHEN vote.content_type = 'milestone' THEN TIMEDIFF(vote.created_at + INTERVAL $minsMileStone MINUTE, current_timestamp())
 							WHEN vote.content_type = 'simple' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
+							WHEN vote.content_type = 'admin-grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
 							ELSE null END ) AS timeLeft")
-					])
+					]);
+					if($sort_key == 'vote_result_type' &&  $sort_direction == 'asc' ) {
+						$votes = $votes->orderByRaw('-vote_result.type ASC');
+					}
+					$votes = $votes
 					->orderBy($sort_key, $sort_direction)
 					->groupBy('vote.id')
 					->offset($start)
@@ -2585,10 +2729,11 @@ class SharedController extends Controller
 						'users.last_name',
 						'users.id as user_id',
 						'vote.*',
-						DB::raw('(CASE WHEN vote.content_type = \'grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
+						DB::raw('(CASE WHEN vote.content_type = \'grant\' OR proposal.type = \'admin-grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
 						DB::raw("(CASE WHEN vote.content_type = 'grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsInformal MINUTE, current_timestamp())  
 							WHEN vote.content_type = 'milestone' THEN TIMEDIFF(vote.created_at + INTERVAL $minsMileStone MINUTE, current_timestamp())
 							WHEN vote.content_type = 'simple' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
+							WHEN vote.content_type = 'admin-grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
 							ELSE null END ) AS timeLeft")
 					])
 					->orderBy($sort_key, $sort_direction)
@@ -2683,6 +2828,39 @@ class SharedController extends Controller
 			return Excel::download(new ProposalExport($proposals), 'proposal.csv');
 	}
 
+	public function resendKycKangaroo(Request $request)
+	{
+		$user = Auth::user();
+		$user_id = $user->hasRole('admin') ? $request->user_id : $user->id;
+		$shuftipro_temp = ShuftiproTemp::where('user_id', $user_id)->whereNotNull('invite_id')->first();
+		if ($shuftipro_temp) {
+			$now = Carbon::now();
+			if ($now->diffInMinutes($shuftipro_temp->invited_at) <= 60) {
+				return [
+					'success' => false,
+					'message' => 'You can only resend your link once every hour.',
+				];
+			}
+			$user = User::find($user_id);
+			$kyc_response = Helper::inviteKycKangaroo("$user->first_name $user->last_name", $user->email, $shuftipro_temp->invite_id);
+			if (!$kyc_response || $kyc_response['success'] == false) {
+				return [
+					'success' => false,
+					'message' => $kyc_response['message'] ?? '',
+					'invite' => $kyc_response['invite'] ?? null,
+				];
+			}
+			$shuftipro_temp->invited_at = now();
+			$shuftipro_temp->save();
+			return [
+				'success' => true,
+				'message' => $kyc_response['message'] ?? '',
+			];
+		} else {
+			return ['success' => false];
+		}
+	}
+	
 	public function getTrackingProposal($proposalId)
 	{
 		$trackings = GrantTracking::where('proposal_id', $proposalId)->get();
@@ -2690,5 +2868,24 @@ class SharedController extends Controller
 			'success' => true,
 			'trackings' => $trackings
 		];
+	}
+
+	public function exportCSVProposal($proposalId, $voteId, Request $request)
+	{
+		$voteResults = collect();
+		$result = $this->getSingleProposal($proposalId, $request);
+
+		if ($result['success']) {
+			$proposal = $result['proposal'];
+			$vote = $proposal->votes->first(function ($value, $key) use ($voteId) {
+				return $value->id == $voteId;
+			});
+
+			if ($vote) {
+				$voteResults = $vote->results;
+			}
+		}
+
+		return Excel::download(new VoteResultExport($voteResults), "proposal_" . $proposalId . "_vote_results_.csv");
 	}
 }

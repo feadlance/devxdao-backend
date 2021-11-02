@@ -51,4 +51,9 @@ return [
         'client_secret_test' => env('SHUFTIPRO_CLIENTSECRET_TEST'),
     ],
 
+    'kyc_kangaroo' => [
+        'url' => env('KYC_KANGAROO_URL'),
+        'token' => env('KYC_KANGAROO_TOKEN'),
+    ],
+
 ];

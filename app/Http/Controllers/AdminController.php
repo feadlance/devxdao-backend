@@ -40,6 +40,7 @@ use App\Exports\DosFeeExport;
 use App\Exports\MilestoneExport;
 use App\Exports\MyReputationExport;
 use App\Exports\ProposalMentorExport;
+use App\Exports\SurveyDownvoteExport;
 use App\Exports\SurveyVoteExport;
 use App\Exports\SurveyWinExport;
 use App\Exports\UserExport;
@@ -50,6 +51,7 @@ use App\FinalGrant;
 use App\Http\Helper;
 use App\IpHistory;
 use App\Mail\AdminAlert;
+use App\Mail\ComplianceReview;
 use App\Mail\InviteAdminMail;
 use App\Mail\UserAlert;
 use App\Mail\ResetKYC;
@@ -58,6 +60,8 @@ use App\MilestoneLog;
 use App\MilestoneReview;
 use App\SignatureGrant;
 use App\Survey;
+use App\SurveyDownVoteRank;
+use App\SurveyDownVoteResult;
 use App\SurveyRank;
 use App\SurveyResult;
 use Carbon\Carbon;
@@ -510,6 +514,7 @@ class AdminController extends Controller
 		// Variables
 		$sort_key = $sort_direction = $search = '';
 		$page_id = 0;
+		$hide_denined = $request->hide_denined;
 		$data = $request->all();
 		if ($data && is_array($data)) extract($data);
 
@@ -546,9 +551,13 @@ class AdminController extends Controller
 						->where('vote.type', 'formal');
 				})
 				->where('onboarding.status', 'pending')
-				->where(function ($query) use ($search) {
+				->where(function ($query) use ($search, $hide_denined) {
 					if ($search) {
 						$query->where('proposal.title', 'like', '%' . $search . '%');
+					}
+					if($hide_denined) {
+						$query->where('shuftipro.status', '!=', 'denied')
+						->where('onboarding.compliance_status', '!=', 'denied');
 					}
 				})
 				->select([
@@ -758,6 +767,10 @@ class AdminController extends Controller
 
 			if ($onboarding) {
 				$onboarding->status = "completed";
+				$onboarding->compliance_status = "approved";
+				$onboarding->compliance_reviewed_at = now();
+				$onboarding->admin_email = $user->email;
+				$onboarding->force_to_formal = 1;
 				$onboarding->save();
 			}
 
@@ -818,6 +831,7 @@ class AdminController extends Controller
 				// 'president_email' => 'required',
 				'gate_new_grant_votes' => 'required',
 				'gate_new_milestone_votes' => 'required',
+				'compliance_admin' => 'required',
 			]);
 			if ($validator->fails()) {
 				return [
@@ -863,6 +877,7 @@ class AdminController extends Controller
 				// 'president_email' => $request->get('president_email'),
 				'gate_new_grant_votes' => $request->get('gate_new_grant_votes'),
 				'gate_new_milestone_votes' => $request->get('gate_new_milestone_votes'),
+				'compliance_admin' => $request->get('compliance_admin'),
 			];
 
 			foreach ($items as $name => $value) {
@@ -964,16 +979,28 @@ class AdminController extends Controller
 			$proposal = Proposal::find($proposalId);
 
 			if ($proposal) {
-				$proposal->status = 'payment';
-				$proposal->save();
+				if ($proposal->type == 'admin-grant') {
+					$proposal->status = 'approved';
+					$proposal->save();
+					$proposal->approved_at = $proposal->updated_at;
+					$proposal->save();
 
+					Helper::createGrantTracking($proposalId, "Approved by admin", 'approved_by_admin');
+					Helper::createGrantTracking($proposal->id, "Entered discussion phase", 'discussion_phase', $proposal->approved_at);
+
+				} else {
+					$proposal->status = 'payment';
+					$proposal->save();
+
+					Helper::createGrantTracking($proposalId, "Approved by admin", 'approved_by_admin');
+				}
 				$op = User::find($proposal->user_id);
 
 				// Emailer User
 				if ($op) {
 					$emailerData = Helper::getEmailerData();
 					Helper::triggerUserEmail($op, 'Admin Approval', $emailerData, $proposal);
-					Helper::createGrantTracking($proposalId, "Approved by admin", 'approved_by_admin');
+
 				}
 			}
 		}
@@ -1151,6 +1178,16 @@ class AdminController extends Controller
 
 				$finalGrant->status = 'active';
 				$finalGrant->save();
+
+				Helper::createGrantLogging([
+					'proposal_id' => $finalGrant->proposal->id,
+					'final_grant_id' => $finalGrant->id,
+					'user_id' => $user->id,
+					'email' => $user->email,
+					'role' => 'admin',
+					'type' => 'completed',
+				]);
+
 				$userGrant = User::where('id', $finalGrant->user_id)->first();
 				if ($userGrant) {
 					$userGrant->check_active_grant = 1;
@@ -2026,8 +2063,8 @@ class AdminController extends Controller
 	// resned Send grant Hellosign Request
 	public static function resendHellosignGrant($grantId)
 	{
-		$user = Auth::user();
-		if ($user && $user->hasRole('admin')) {
+		$admin = Auth::user();
+		if ($admin && $admin->hasRole('admin')) {
 			$finalGrant = FinalGrant::with(['proposal', 'user'])
 				->has('proposal')
 				->has('user')
@@ -2043,11 +2080,44 @@ class AdminController extends Controller
 					'message' => 'Invalid grant'
 				];
 			}
+
+			Helper::createGrantLogging([
+				'proposal_id' => $finalGrant->proposal_id,
+				'final_grant_id' => $finalGrant->id,
+				'user_id' => $admin->id,
+				'email' => $admin->email,
+				'role' => 'admin',
+				'type' => 'resent',
+			]);
+
 			$client = new \HelloSign\Client(config('services.hellosign.api_key'));
 			$client->cancelSignatureRequest($signature_grant_request_id);
+
+			// Log when request to Hellosign
+			$signatures = SignatureGrant::where('proposal_id',  $finalGrant->proposal_id)->all();
+			Helper::createHellosignLogging(
+				$admin->id,
+				'Cancel Signature Request',
+				'cancel_signature_request',
+				json_encode([
+					'Signatures' => $signatures->only(['email', 'role', 'signed']),
+				])
+			);
+
 			SignatureGrant::where('proposal_id', $finalGrant->proposal_id)
 				->update(['signed' => 0]);
+
+			Helper::createGrantLogging([
+				'proposal_id' => $finalGrant->proposal_id,
+				'final_grant_id' => $finalGrant->id,
+				'user_id' => null,
+				'email' => null,
+				'role' => 'system',
+				'type' => 'cancelled_doc',
+			]);
+
 			Helper::sendGrantHellosign($user, $proposal, $settings);
+
 			return ['success' => true];
 		}
 		return ['success' => false];
@@ -2057,8 +2127,8 @@ class AdminController extends Controller
 	public static function remindHellosignGrant($grantId)
 	{
 		try {
-			$user = Auth::user();
-			if ($user && $user->hasRole('admin')) {
+			$admin = Auth::user();
+			if ($admin && $admin->hasRole('admin')) {
 				$finalGrant = FinalGrant::with(['proposal', 'user'])
 					->has('proposal')
 					->has('user')
@@ -2072,10 +2142,39 @@ class AdminController extends Controller
 					];
 				}
 				$signatureGrants = SignatureGrant::where('proposal_id', $finalGrant->proposal_id)->where('signed', 0)->get();
+				Helper::createGrantLogging([
+					'proposal_id' => $finalGrant->proposal_id,
+					'final_grant_id' => $finalGrant->id,
+					'user_id' => $admin->id,
+					'email' => $admin->email,
+					'role' => 'admin',
+					'type' => 'reminded',
+				]);
+
 				foreach ($signatureGrants as $value) {
 					$client = new \HelloSign\Client(config('services.hellosign.api_key'));
 					$client->requestEmailReminder($signature_grant_request_id, $value->email, $value->name);
+
+					// Log when request to Hellosign
+					$signatures = SignatureGrant::where('proposal_id',  $finalGrant->proposal_id)->all();
+					Helper::createHellosignLogging(
+						$admin->id,
+						'Request Email Reminder',
+						'request_email_reminder',
+						json_encode([
+							'Signatures' => $signatures->only(['email', 'role', 'signed']),
+						])
+					);
 				}
+				Helper::createGrantLogging([
+					'proposal_id' => $finalGrant->proposal_id,
+					'final_grant_id' => $finalGrant->id,
+					'user_id' => null,
+					'email' => null,
+					'role' => 'system',
+					'type' => 'reminded_doc',
+				]);
+
 				return ['success' => true];
 			}
 			return ['success' => false];
@@ -3212,6 +3311,7 @@ class AdminController extends Controller
 				'number_response' => 'required|numeric|min:1|max:10',
 				'time' => 'required|numeric|min:1|max:100',
 				'time_unit' => 'required|in:minutes,hours,days',
+				'downvote' => 'required|in:0,1',
 			]);
 			if ($validator->fails()) {
 				return [
@@ -3232,6 +3332,7 @@ class AdminController extends Controller
 			$timeEnd = Carbon::now('UTC')->addMinutes($mins);
 			$survey = new Survey();
 			$survey->number_response = $request->number_response;
+			$survey->downvote = $request->downvote;
 			$survey->time = $time;
 			$survey->time_unit = $timeUnit;
 			$survey->end_time = $timeEnd;
@@ -3301,7 +3402,11 @@ class AdminController extends Controller
 	{
 		$survey = Survey::where('id', $id)->with(['surveyRanks' => function ($q) {
 			$q->orderBy('rank', 'desc');
-		}])->with(['surveyRanks.proposal'])->first();
+		}])->with(['surveyRanks.proposal'])
+		->with(['surveyDownvoteRanks' => function ($q) {
+			$q->orderBy('rank', 'desc');
+		}])->with(['surveyDownvoteRanks.proposal'])
+		->first();
 		if (!$survey) {
 			return [
 				'success' => false,
@@ -3443,21 +3548,28 @@ class AdminController extends Controller
 		$start = $limit * ($page_id - 1);
 
 		// Records
-		$proposals = SurveyResult::where('survey_result.survey_id', $id)
+		$proposalsVote = SurveyResult::where('survey_result.survey_id', $id)
 			->where('survey_result.user_id', $userId)
 			->join('proposal', 'survey_result.proposal_id', '=', 'proposal.id')
 			->orderBy($sort_key, $sort_direction)
-			->offset($start)
-			->limit($limit)
 			->select([
 				'proposal.title',
 				'survey_result.*'
 			])
 			->get();
+		$proposalsDownvote = SurveyDownVoteResult::where('survey_downvote_result.survey_id', $id)
+			->where('survey_downvote_result.user_id', $userId)
+			->join('proposal', 'survey_downvote_result.proposal_id', '=', 'proposal.id')
+			->orderBy('survey_downvote_result.created_at', $sort_direction)
+			->select([
+				'proposal.title',
+				'survey_downvote_result.*'
+			])
+			->get();
 		return [
 			'success' => true,
-			'proposals' => $proposals,
-			'finished' => count($proposals) < $limit ? true : false
+			'voted' => $proposalsVote,
+			'downvoted' => $proposalsDownvote,
 		];
 	}
 
@@ -3473,19 +3585,18 @@ class AdminController extends Controller
 		if (!$sort_key) $sort_key = 'survey_result.created_at';
 		if (!$sort_direction) $sort_direction = 'desc';
 		$page_id = (int) $page_id;
+		$limit = (int) $limit;
 		if ($page_id <= 0) $page_id = 1;
-
+		if ($limit <= 0) $limit = 10;
 		$start = $limit * ($page_id - 1);
-
 		// Records
-		$users = SurveyResult::where('survey_result.survey_id', $id)
-			->select('user_id', 'users.email')
-			->distinct()
-			->orderBy($sort_key, $sort_direction)
-			->join('users', 'survey_result.user_id', '=', 'users.id')
-			->offset($start)
-			->limit($limit)
+		$users_vote = SurveyResult::where('survey_result.survey_id', $id)->distinct('user_id')->pluck('user_id')->toArray();
+		$users_downvote =  SurveyDownVoteResult::where('survey_downvote_result.survey_id', $id)->distinct('user_id')->pluck('user_id')->toArray();
+		$user_ids = array_merge($users_vote, $users_downvote);
+		$users = User::whereIn('id', $user_ids)->select(['id', 'email'])
+			->offset($start)->limit($limit)
 			->get();
+
 		return [
 			'success' => true,
 			'users' => $users,
@@ -3509,7 +3620,9 @@ class AdminController extends Controller
 		if ($limit <= 0) $limit = 10;
 
 		$start = $limit * ($page_id - 1);
-		$user_ids = SurveyResult::select('user_id')->where('survey_id', $id)->distinct('user_id')->pluck('user_id');
+		$users_vote = SurveyResult::where('survey_result.survey_id', $id)->distinct('user_id')->pluck('user_id')->toArray();
+		$users_downvote =  SurveyDownVoteResult::where('survey_downvote_result.survey_id', $id)->distinct('user_id')->pluck('user_id')->toArray();
+		$user_ids = array_merge($users_vote, $users_downvote);
 		$users = User::where('is_member', 1)
 			->where('banned', 0)
 			->where('can_access', 1)
@@ -3533,7 +3646,9 @@ class AdminController extends Controller
 				'message' => 'The survey not exist'
 			];
 		}
-		$user_ids = SurveyResult::select('user_id')->where('survey_id', $id)->distinct('user_id')->pluck('user_id');
+		$users_vote = SurveyResult::where('survey_result.survey_id', $id)->distinct('user_id')->pluck('user_id')->toArray();
+		$users_downvote =  SurveyDownVoteResult::where('survey_downvote_result.survey_id', $id)->distinct('user_id')->pluck('user_id')->toArray();
+		$user_ids = array_merge($users_vote, $users_downvote);
 		$users = User::where('is_member', 1)
 			->where('banned', 0)
 			->where('can_access', 1)
@@ -3547,21 +3662,151 @@ class AdminController extends Controller
 		];
 	}
 
+	public function resendComplianceEmail(Request $request)
+	{
+		$user = Auth::user();
+		// Validator
+		$validator = Validator::make($request->all(), [
+			'proposalId' => 'required',
+		]);
+		if ($validator->fails()) {
+			return [
+				'success' => false,
+				'message' => 'Provide all the necessary information'
+			];
+		}
+		$proposalId = $request->proposalId;
+		$proposal = Proposal::find($proposalId);
+		$onboarding  = OnBoarding::where('proposal_id', $proposalId)->first();
+		if (!$onboarding || !$proposal) {
+			return [
+				'success' => false,
+				'message' => 'Proposal does not exist'
+			];
+		}
+		$settings = Helper::getSettings();
+		$token = Str::random(50);
+		if ($settings['compliance_admin']) {
+			$title = "Proposal $proposal->id needs a compliance review";
+			$public_url = config('app.fe_url') . "/public-proposals/$proposal->id";
+			$approve_url = config('app.fe_url') . "/compliance-approve-grant/$proposal->id?token=$token";
+			$deny_url = config('app.fe_url') . "/compliance-deny-grant/$proposal->id?token=$token";
+			Mail::to($settings['compliance_admin'])->send(new ComplianceReview($title, $proposal, $public_url, $approve_url, $deny_url));
+		}
+		$onboarding->compliance_token = $token;
+		$onboarding->admin_email = $settings['compliance_admin'];
+		$onboarding->save();
+		return [
+			'success' => true,
+		];
+	}
+
+	public function approveComplianceReview(Request $request)
+	{
+		$validator = Validator::make($request->all(), [
+			'proposalId' => 'required',
+			'token' => 'required',
+		]);
+		if ($validator->fails()) {
+			return [
+				'success' => false,
+				'message' => 'Provide all the necessary information'
+			];
+		}
+		$proposalId = $request->proposalId;
+		$proposal = Proposal::find($proposalId);
+		$onboarding  = OnBoarding::where('proposal_id', $proposalId)->where('compliance_token', $request->token)->first();
+		if (!$onboarding || !$proposal) {
+			return [
+				'success' => false,
+				'message' => 'Proposal does not exist'
+			];
+		}
+		$settings = Helper::getSettings();
+		$onboarding->compliance_status = 'approved';
+		$onboarding->compliance_reviewed_at = now();
+		$onboarding->save();
+		Helper::createGrantTracking($proposalId, "ETA compliance complete", 'eta_compliance_complete');
+		$shuftipro = Shuftipro::where('user_id', $onboarding->user_id)->where('status', 'approved')->first();
+		if($shuftipro) {
+			$onboarding->status = 'approved';
+			$onboarding->save();
+			$vote = Vote::find($onboarding->vote_id);
+			$op = User::find($onboarding->user_id);
+			$emailerData = Helper::getEmailerData();
+			if ($vote && $op && $proposal) {
+				Helper::triggerUserEmail($op, 'Passed Informal Grant Vote', $emailerData, $proposal, $vote);
+			}
+			Helper::startFormalVote($vote);
+		}
+		return [
+			'success' => true,
+			'proposal' => $proposal,
+			'onboarding' => $onboarding,
+			'compliance_admin' => $settings['compliance_admin'],
+		];
+	}
+
+	public function denyComplianceReview(Request $request)
+	{
+		$validator = Validator::make($request->all(), [
+			'proposalId' => 'required',
+			'token' => 'required',
+			'reason' => 'required',
+		]);
+		if ($validator->fails()) {
+			return [
+				'success' => false,
+				'message' => 'Provide all the necessary information'
+			];
+		}
+		$proposalId = $request->proposalId;
+		$proposal = Proposal::find($proposalId);
+		$onboarding  = OnBoarding::where('proposal_id', $proposalId)->where('compliance_token', $request->token)->first();
+		if (!$onboarding || !$proposal) {
+			return [
+				'success' => false,
+				'message' => 'Proposal does not exist'
+			];
+		}
+		$settings = Helper::getSettings();
+		$onboarding->compliance_status = 'denied';
+		$onboarding->compliance_reviewed_at = now();
+		$onboarding->deny_reason = $request->reason;
+		$onboarding->save();
+		return [
+			'success' => true,
+			'proposal' => $proposal,
+			'onboarding' => $onboarding,
+			'compliance_admin' => $settings['compliance_admin'],
+		];
+	}
+
 	public function getSurveyWin(Request $request)
 	{
+		$page_id = 0;
+		$sort_key = $sort_direction  = '';
+		$data = $request->all();
+		if ($data && is_array($data)) extract($data);
+		if (!$sort_key) $sort_key = 'rank';
+		if (!$sort_direction) $sort_direction = 'desc';
+		$page_id = (int) $page_id;
+		if ($page_id <= 0) $page_id = 1;
+		$limit = isset($data['limit']) ? $data['limit'] : 20;
+		$start = $limit * ($page_id - 1);
 		$start_date = $request->start_date;
 		$end_date = $request->end_date;
-		$sort_key = $request->sort_key ?? 'rank';
-		$sort_direction = $request->sort_direction ?? 'desc';
 		$current_status = $request->current_status;
 		$spot_rank = $request->spot_rank;
+
 		$proposals = SurveyRank::where('is_winner', 1)
 			->join('survey', 'survey.id', '=', 'survey_rank.survey_id')
 			->join('proposal', 'proposal.id', '=', 'survey_rank.proposal_id')
 			->select([
 				'proposal.*',
 				'survey.end_time',
-				'survey_rank.rank'
+				'survey_rank.rank',
+				'survey.id as survey_id',
 			])
 			->where(function ($query) use ($start_date, $end_date) {
 				if ($start_date) {
@@ -3570,7 +3815,7 @@ class AdminController extends Controller
 				if ($end_date) {
 					$query->whereDate('survey.end_time', '<=', $end_date);
 				}
-			})->orderBy('survey_rank.total_point', 'desc')->get();
+			})->orderBy('survey_rank.rank', 'asc')->get();
 		foreach ($proposals as $proposal) {
 			$status =  Helper::getStatusProposal($proposal);
 			$key_status = str_replace(' ', '_', strtolower($status));
@@ -3587,25 +3832,16 @@ class AdminController extends Controller
 		}
 		if ($spot_rank) {
 			$proposals = $proposals->where('rank', $spot_rank);
-		} else {
-			$results = collect();
-			for ($i = 1; $i <= 5; $i++) {
-				$proposal = $proposals->sortByDesc('total_point')->firstWhere('rank', $i);
-				if ($proposal) {
-					$results->push($proposal);
-				}
-			}
-			$proposals = $results;
 		}
-
 		if ($sort_direction == 'asc') {
 			$proposals = $proposals->sortBy($sort_key)->values();
 		} else {
 			$proposals = $proposals->sortByDesc($sort_key)->values();
 		}
+		$response = $proposals->slice($start, $limit)->values();
 		return [
 			'success' => true,
-			'proposals' => $proposals,
+			'proposals' => $response,
 		];
 	}
 
@@ -3642,7 +3878,7 @@ class AdminController extends Controller
 		$start_date = $request->start_date;
 		$end_date = $request->end_date;
 		$sort_key = $request->sort_key ?? 'rank';
-		$sort_direction = $request->sort_direction ?? 'desc';
+		$sort_direction = $request->sort_direction ?? 'asc';
 		$current_status = $request->current_status;
 		$spot_rank = $request->spot_rank;
 		$proposals = SurveyRank::where('is_winner', 1)
@@ -3651,7 +3887,8 @@ class AdminController extends Controller
 			->select([
 				'proposal.*',
 				'survey.end_time',
-				'survey_rank.rank'
+				'survey_rank.rank',
+				'survey.id as survey_id',
 			])
 			->where(function ($query) use ($start_date, $end_date) {
 				if ($start_date) {
@@ -3660,7 +3897,7 @@ class AdminController extends Controller
 				if ($end_date) {
 					$query->whereDate('survey.end_time', '<=', $end_date);
 				}
-			})->orderBy('survey_rank.total_point', 'desc')->get();
+			})->orderBy('survey_rank.rank', 'asc')->get();
 		foreach ($proposals as $proposal) {
 			$status =  Helper::getStatusProposal($proposal);
 			$key_status = str_replace(' ', '_', strtolower($status));
@@ -3677,15 +3914,6 @@ class AdminController extends Controller
 		}
 		if ($spot_rank) {
 			$proposals = $proposals->where('rank', $spot_rank);
-		} else {
-			$results = collect();
-			for ($i = 1; $i <= 5; $i++) {
-				$proposal = $proposals->sortByDesc('total_point')->firstWhere('rank', $i);
-				if ($proposal) {
-					$results->push($proposal);
-				}
-			}
-			$proposals = $results;
 		}
 
 		if ($sort_direction == 'asc') {
@@ -3882,5 +4110,307 @@ class AdminController extends Controller
 			return ['success' => true];
 		}
     return ['success' => false];
+    }
+
+    public function sendKycKangaroo(Request $request)
+	{
+        $user = User::find($request->user_id);
+        if(!$user) {
+            return [
+                'success' => false,
+                'message' => 'Not found user'
+			];
+        }
+		$shuftipro_temp = ShuftiproTemp::where('user_id', $user->id)->first();
+		$invite_id =  $shuftipro_temp->invite_id ?? null;
+		$shuftipro = Shuftipro::where('user_id', $user->id)->where('status', 'approved')->first();
+		if(!$shuftipro) {
+			ShuftiproTemp::where('user_id', $user->id)->delete();
+			$kyc_response = Helper::inviteKycKangaroo("$user->first_name $user->last_name", $user->email, $invite_id);
+			if(isset($kyc_response['success']) && $kyc_response['success'] == false) {
+				Helper::processKycKangaroo($kyc_response, $user->id);
+				return [
+					'success' => false,
+					'message' => $kyc_response['message'],
+					'invite' => $kyc_response['invite'] ?? null,
+				];
+			}
+			$shuftipro_temp = new ShuftiproTemp();
+			$shuftipro_temp->user_id = $user->id;
+			$shuftipro_temp->reference_id = '';
+			$shuftipro_temp->status = 'booked';
+			$shuftipro_temp->invite_id = $kyc_response['invite_id'] ?? null;
+			$shuftipro_temp->invited_at = now();
+			$shuftipro_temp->save();
+			return [
+				'success' => true,
+			];
+		} else {
+			return [
+				'success' => false,
+			];
+        }
+    }
+
+	public function getSurveyDownvote(Request $request)
+	{
+		$page_id = 0;
+		$sort_key = $sort_direction  = '';
+		$data = $request->all();
+		if ($data && is_array($data)) extract($data);
+		if (!$sort_key) $sort_key = 'rank';
+		if (!$sort_direction) $sort_direction = 'desc';
+		$page_id = (int) $page_id;
+		if ($page_id <= 0) $page_id = 1;
+		$limit = isset($data['limit']) ? $data['limit'] : 20;
+		$start = $limit * ($page_id - 1);
+		$start_date = $request->start_date;
+		$end_date = $request->end_date;
+		$current_status = $request->current_status;
+		$spot_rank = $request->spot_rank;
+
+		$proposals = SurveyDownVoteRank::where('is_winner', 1)
+			->join('survey', 'survey.id', '=', 'survey_downvote_rank.survey_id')
+			->join('proposal', 'proposal.id', '=', 'survey_downvote_rank.proposal_id')
+			->select([
+				'proposal.*',
+				'survey.end_time',
+				'survey.id as survey_id',
+				'survey_downvote_rank.rank',
+				'survey_downvote_rank.is_approved',
+				'survey_downvote_rank.downvote_approved_at',
+			])
+			->where(function ($query) use ($start_date, $end_date) {
+				if ($start_date) {
+					$query->whereDate('survey.end_time', '>=', $start_date);
+				}
+				if ($end_date) {
+					$query->whereDate('survey.end_time', '<=', $end_date);
+				}
+			})->orderBy('survey_downvote_rank.total_point', 'desc')->get();
+		foreach ($proposals as $proposal) {
+			$status =  Helper::getStatusProposal($proposal);
+			$key_status = str_replace(' ', '_', strtolower($status));
+			$proposal->end_time = Carbon::parse($proposal->end_time);
+			$proposal->current_status = $key_status;
+			$proposal->status = [
+				'label' => $status,
+				'key' =>  str_replace(' ', '_', strtolower($status)),
+			];
+		}
+
+		if ($current_status) {
+			$proposals = $proposals->where('current_status', $current_status);
+		}
+		if ($spot_rank) {
+			$proposals = $proposals->where('rank', $spot_rank);
+		}
+
+		if ($sort_direction == 'asc') {
+			$proposals = $proposals->sortBy($sort_key)->values();
+		} else {
+			$proposals = $proposals->sortByDesc($sort_key)->values();
+		}
+		$response = $proposals->slice($start, $limit)->values();
+		return [
+			'success' => true,
+			'proposals' => $response,
+		];
+	}
+
+	public function approveDowvote(Request $request)
+	{
+		$proposalId = $request->proposalId;
+		$proposal = Proposal::find($proposalId);
+		if(!$proposal) {
+			return [
+                'success' => false,
+                'message' => 'Proposal not found'
+			];
+		}
+		$surveyRankDownvote = SurveyDownVoteRank::where('proposal_id', $proposalId)->where('is_winner', 1)->first();
+		if(!$surveyRankDownvote) {
+			return [
+                'success' => false,
+                'message' => 'Proposal not found in rank'
+			];
+		}
+		$surveyRankDownvote->is_approved = 1;
+		$surveyRankDownvote->downvote_approved_at = now();
+		$surveyRankDownvote->save();
+		$user = User::find($proposal->user_id);
+		if($user) {
+			$title = "Your proposal $proposal->id has been downvoted";
+			$content = "Your proposal $proposal->id regarding $proposal->title has been downvoted by the DxD voting associate group. The discussion for the proposal has been ended and the proposal cannot move forward.";
+			Mail::to($user->email)->send(new UserAlert($title, $content));
+		}
+		return  [
+			'success' => true,
+		];
+	}
+
+	public function getDisscustionDownvote($id, Request $request)
+	{
+		$survey = Survey::where('id', $id)->first();
+		if (!$survey) {
+			return [
+				'success' => false,
+				'message' => 'Not found survey'
+			];
+		}
+		$user = Auth::user();
+		$proposals = [];
+
+		// Variables
+		$sort_key = $sort_direction = $search = '';
+		$page_id = 0;
+		$data = $request->all();
+		if ($data && is_array($data)) extract($data);
+
+		if (!$sort_key) $sort_key = 'id';
+		if (!$sort_direction) $sort_direction = 'desc';
+		$page_id = (int) $page_id;
+		if ($page_id <= 0) $page_id = 1;
+
+		$limit = isset($data['limit']) ? $data['limit'] : 10;
+		$start = $limit * ($page_id - 1);
+
+		// Record
+		$proposals = Proposal::where('proposal.status', 'approved')
+			->doesntHave('votes')
+			->where(function ($query) use ($search) {
+				if ($search) {
+					$query->where('proposal.title', 'like', '%' . $search . '%')
+						->orWhere('proposal.id', 'like', '%' . $search . '%');
+				}
+			})
+			->get();
+		$results = SurveyDownVoteResult::where('survey_id', $id)->get();
+		foreach ($proposals as $proposal) {
+			for ($i = 1; $i <= $survey->number_response; $i++) {
+				$key = $i . '_place';
+				$proposal->$key = null;
+			}
+			$total_vote = count($results->where("proposal_id", $proposal->id));
+			$proposal->total_vote = $total_vote;
+			if ($total_vote) {
+				for ($i = 1; $i <= $survey->number_response; $i++) {
+					$key = $i . '_place';
+					$proposal->$key = count($results->where("proposal_id", $proposal->id)->where('place_choice', $i));
+				}
+			}
+		}
+		if ($sort_direction == 'asc') {
+			$sorted = $proposals->sortBy($sort_key)->values();
+		} else {
+			$sorted = $proposals->sortByDesc($sort_key)->values();
+		}
+		$response = $sorted->slice($start, $limit)->values();
+		return [
+			'success' => true,
+			'proposals' => $response,
+			'finished' => count($response) < $limit ? true : false
+		];
+	}
+
+	public function exportCSVDownvoteSurvey($id, Request $request)
+	{
+		$survey = Survey::where('id', $id)->first();
+		if (!$survey) {
+			return [
+				'success' => false,
+				'message' => 'Not found survey'
+			];
+		}
+		// Variables
+		$sort_key = $sort_direction = $search = '';
+		$data = $request->all();
+		if ($data && is_array($data)) extract($data);
+
+		if (!$sort_key) $sort_key = 'id';
+		if (!$sort_direction) $sort_direction = 'desc';
+		$proposals = Proposal::where('proposal.status', 'approved')
+			->doesntHave('votes')
+			->where(function ($query) use ($search) {
+				if ($search) {
+					$query->where('proposal.title', 'like', '%' . $search . '%')
+						->orWhere('proposal.id', 'like', '%' . $search . '%');
+				}
+			})
+			->get();
+		$results = SurveyDownVoteResult::where('survey_id', $id)->get();
+		foreach ($proposals as $proposal) {
+			for ($i = 1; $i <= $survey->number_response; $i++) {
+				$key =  'place_' . $i;
+				$proposal->$key = null;
+			}
+			$total_vote = count($results->where("proposal_id", $proposal->id));
+			$proposal->total_vote = $total_vote;
+			if ($total_vote) {
+				for ($i = 1; $i <= $survey->number_response; $i++) {
+					$key =  'place_' . $i;
+					$proposal->$key = count($results->where("proposal_id", $proposal->id)->where('place_choice', $i));
+				}
+			}
+		}
+		if ($sort_direction == 'asc') {
+			$sorted = $proposals->sortBy($sort_key)->values();
+		} else {
+			$sorted = $proposals->sortByDesc($sort_key)->values();
+		}
+		return Excel::download(new SurveyVoteExport($sorted, $survey), "survey_downvote_" . $survey->id . "_vote.csv");
+	}
+
+	public function exportCSVSurveyDownvote(Request $request)
+	{
+		$start_date = $request->start_date;
+		$end_date = $request->end_date;
+		$sort_key = $request->sort_key ?? 'rank';
+		$sort_direction = $request->sort_direction ?? 'asc';
+		$current_status = $request->current_status;
+		$spot_rank = $request->spot_rank;
+		$proposals = SurveyDownVoteRank::where('is_winner', 1)
+			->join('survey', 'survey.id', '=', 'survey_downvote_rank.survey_id')
+			->join('proposal', 'proposal.id', '=', 'survey_downvote_rank.proposal_id')
+			->select([
+				'proposal.*',
+				'survey.end_time',
+				'survey.id as survey_id',
+				'survey_downvote_rank.rank',
+				'survey_downvote_rank.is_approved',
+				'survey_downvote_rank.downvote_approved_at',
+			])
+			->where(function ($query) use ($start_date, $end_date) {
+				if ($start_date) {
+					$query->whereDate('survey.end_time', '>=', $start_date);
+				}
+				if ($end_date) {
+					$query->whereDate('survey.end_time', '<=', $end_date);
+				}
+			})->orderBy('survey_downvote_rank.total_point', 'desc')->get();
+		foreach ($proposals as $proposal) {
+			$status =  Helper::getStatusProposal($proposal);
+			$key_status = str_replace(' ', '_', strtolower($status));
+			$proposal->end_time = Carbon::parse($proposal->end_time);
+			$proposal->current_status = $key_status;
+			$proposal->status = [
+				'label' => $status,
+				'key' =>  str_replace(' ', '_', strtolower($status)),
+			];
+		}
+
+		if ($current_status) {
+			$proposals = $proposals->where('current_status', $current_status);
+		}
+		if ($spot_rank) {
+			$proposals = $proposals->where('rank', $spot_rank);
+		}
+
+		if ($sort_direction == 'asc') {
+			$proposals = $proposals->sortBy($sort_key)->values();
+		} else {
+			$proposals = $proposals->sortByDesc($sort_key)->values();
+		}
+		return Excel::download(new SurveyDownvoteExport($proposals), 'survey_downvote.csv');
 	}
 }

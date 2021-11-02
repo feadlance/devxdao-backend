@@ -9,6 +9,7 @@ use App\Milestone;
 use App\MilestoneReview;
 use App\OnBoarding;
 use App\Proposal;
+use App\Shuftipro;
 use App\SurveyRank;
 use App\Vote;
 use Exception;
@@ -69,6 +70,10 @@ class MigrateProposalGrantTracking extends Command
                         if ($onboarding) {
                             $this->saveGrantTracking($proposal->id, "Informal vote passed", 'informal_vote_passed', $onboarding->created_at);
                         }
+                    }
+                    $shuftipro = Shuftipro::where('user_id', $proposal->user_id)->where('status', 'approved')->first();
+                    if ($shuftipro) {
+                        $this->saveGrantTracking($proposal->id, "KYC checks complete", 'kyc_checks_complete', $shuftipro->created_at);
                     }
                     $formal_vote = Vote::where('proposal_id', $proposal->id)->where('type', 'formal')->orderBy('created_at', 'asc')->first();
                     if ($formal_vote) {

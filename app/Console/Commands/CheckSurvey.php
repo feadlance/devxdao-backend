@@ -4,6 +4,8 @@ namespace App\Console\Commands;
 
 use App\Http\Helper;
 use App\Survey;
+use App\SurveyDownVoteRank;
+use App\SurveyDownVoteResult;
 use App\SurveyRank;
 use App\SurveyResult;
 use Illuminate\Console\Command;
@@ -44,37 +46,72 @@ class CheckSurvey extends Command
         $surveys = Survey::where('status', 'active')->where('end_time', '<=', now())->get();
 
         foreach ($surveys as $survey) {
-            $reults = SurveyResult::where('survey_id', $survey->id)->get();
-            $surey_grouped = $reults->groupBy('proposal_id');
-            $responses = collect();
-            foreach ($surey_grouped as $key => $value) {
-                $total_point = $value->sum('point');
-                $responses->push([
-                    'proposal_id' => $key,
-                    'total_point' => $total_point
-                ]);
-            }
-            $sorted = $responses->sortByDesc('total_point');
-            $rank = 1;
-            foreach ($sorted as $response) {
-                if ($rank == 1) {
-                    $survey->proposal_win =  $response['proposal_id'];
-                    $survey->save();
-                }
-                $survey_rank = new SurveyRank();
-                $survey_rank->survey_id = $survey->id;
-                $survey_rank->proposal_id =  $response['proposal_id'];
-                $survey_rank->total_point =   $response['total_point'];
-                $survey_rank->rank =  $rank;
-                $survey_rank->is_winner = $rank <= $survey->number_response ? 1 : 0;
-                $survey_rank->save();
-                if( $rank <= $survey->number_response) {
-                    Helper::createGrantTracking( $response['proposal_id'], "Passed survey in spot $rank", 'passed_survey_spot');
-                }
-                $rank += 1;
-            }
+            $this->processUpvote($survey);
+            $this->processDownvote($survey);
             $survey->status = 'completed';
             $survey->save();
+        }
+    }
+    public function processUpvote($survey)
+    {
+        $reults = SurveyResult::where('survey_id', $survey->id)->get();
+        $surey_grouped = $reults->groupBy('proposal_id');
+        $responses = collect();
+        foreach ($surey_grouped as $key => $value) {
+            $total_point = $value->sum('point');
+            $responses->push([
+                'proposal_id' => $key,
+                'total_point' => $total_point
+            ]);
+        }
+        $sorted = $responses->sortByDesc('total_point');
+        $rank = 1;
+        foreach ($sorted as $response) {
+            if ($rank == 1) {
+                $survey->proposal_win =  $response['proposal_id'];
+                $survey->save();
+            }
+            $survey_rank = new SurveyRank();
+            $survey_rank->survey_id = $survey->id;
+            $survey_rank->proposal_id =  $response['proposal_id'];
+            $survey_rank->total_point =   $response['total_point'];
+            $survey_rank->rank =  $rank;
+            $survey_rank->is_winner = $rank <= $survey->number_response ? 1 : 0;
+            $survey_rank->save();
+            if ($rank <= $survey->number_response) {
+                Helper::createGrantTracking($response['proposal_id'], "Passed survey in spot $rank", 'passed_survey_spot');
+            }
+            $rank += 1;
+        }
+    }
+
+    public function processDownvote($survey)
+    {
+        $reults = SurveyDownVoteResult::where('survey_id', $survey->id)->get();
+        $surey_grouped = $reults->groupBy('proposal_id');
+        $responses = collect();
+        foreach ($surey_grouped as $key => $value) {
+            $total_point = $value->sum('point');
+            $responses->push([
+                'proposal_id' => $key,
+                'total_point' => $total_point
+            ]);
+        }
+        $sorted = $responses->sortByDesc('total_point');
+        $rank = 1;
+        foreach ($sorted as $response) {
+            if ($rank == 1) {
+                $survey->proposal_win =  $response['proposal_id'];
+                $survey->save();
+            }
+            $survey_rank = new SurveyDownVoteRank();
+            $survey_rank->survey_id = $survey->id;
+            $survey_rank->proposal_id =  $response['proposal_id'];
+            $survey_rank->total_point =   $response['total_point'];
+            $survey_rank->rank =  $rank;
+            $survey_rank->is_winner = $rank <= $survey->number_response ? 1 : 0;
+            $survey_rank->save();
+            $rank += 1;
         }
     }
 }

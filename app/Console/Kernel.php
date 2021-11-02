@@ -15,6 +15,7 @@ class Kernel extends ConsoleKernel
     protected $commands = [
         'App\Console\Commands\CheckVote',
         'App\Console\Commands\CheckSimpleVote',
+        'App\Console\Commands\CheckAdminGrantVote',
         'App\Console\Commands\CheckMilestoneVote',
         'App\Console\Commands\CheckProposal',
         'App\Console\Commands\CryptoPrice',
@@ -29,15 +30,19 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule)
     {
-        $schedule->command('shuftipro:check')
-            ->everyFiveMinutes()
-            ->runInBackground();
+        // $schedule->command('shuftipro:check')
+        //     ->everyFiveMinutes()
+        //     ->runInBackground();
             // ->withoutOverlapping();
         $schedule->command('vote:check')
             ->everyMinute()
             ->runInBackground();
             // ->withoutOverlapping();
         $schedule->command('simplevote:check')
+            ->everyMinute()
+            ->runInBackground();
+            // ->withoutOverlapping();
+        $schedule->command('admingrantvote:check')
             ->everyMinute()
             ->runInBackground();
             // ->withoutOverlapping();
@@ -73,6 +78,11 @@ class Kernel extends ConsoleKernel
             ->dailyAt('07:00')
             ->runInBackground();
             // ->withoutOverlapping();
+        $schedule->command('kangaroo:check')
+            ->everyFiveMinutes()
+            ->runInBackground();
+            // ->withoutOverlapping();
+
     }
 
     /**

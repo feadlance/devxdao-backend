@@ -3,6 +3,7 @@
 namespace App;
 
 use Illuminate\Database\Eloquent\Model;
+use Carbon\Carbon;
 
 class Proposal extends Model
 {
@@ -66,5 +67,13 @@ class Proposal extends Model
 
   public function milestoneSubmitHistories() {
     return $this->hasMany('App\MilestoneSubmitHistory', 'proposal_id');
+  }
+
+  public function surveyDownVoteRanks() {
+    return $this->hasMany('App\SurveyDownVoteRank', 'proposal_id');
+  }
+
+  public function getDeliveredAtAttribute($value) {
+    return $value ? (new Carbon($value))->format("Y-m-d") : $value;
   }
 }

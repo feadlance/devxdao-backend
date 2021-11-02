@@ -22,4 +22,9 @@ class FinalGrant extends Model
 	{
 		return $this->hasMany('App\SignatureGrant', 'proposal_id', 'proposal_id');
 	}
+
+	public function grantLogs()
+	{
+		return $this->hasMany('App\GrantLog', 'proposal_id', 'proposal_id');
+	}
 }

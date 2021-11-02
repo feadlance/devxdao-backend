@@ -39,7 +39,8 @@ Route::post('/start-guest', 'APIController@startGuest');
 Route::post('/send-reset-email', 'APIController@sendResetEmail');
 Route::post('/reset-password', 'APIController@resetPassword');
 Route::post('/ops/login', 'OpsController@login');
-
+Route::post('/compliance-review/approve', 'AdminController@approveComplianceReview');
+Route::post('/compliance-review/deny', 'AdminController@denyComplianceReview');
 
 Route::get('/admin/milestone/export-csv', 'AdminController@exportMilestone');
 Route::get('/admin/proposal/export-csv', 'SharedController@exportProposal');
@@ -47,9 +48,11 @@ Route::get('/admin/dos-fee/export-csv', 'AdminController@exportCSVDosFee');
 Route::get('/admin/user/export-csv', 'AdminController@exportCSVUser');
 Route::get('/admin/user/{userId}/reputation/export-csv', 'AdminController@exportCSVReputationByUser');
 Route::get('/admin/survey-win/export-csv', 'AdminController@exportCSVtSurveyWin');
+Route::get('/admin/survey-downvote/export-csv', 'AdminController@exportCSVSurveyDownvote');
 Route::get('/survey-vote/{id}/export-csv', 'AdminController@exportCSVVoteSurvey');
 Route::get('/admin/user/{userId}/proposal-mentor/export-csv', 'AdminController@exportCSVMentorProposal');
 Route::get('/admin/active-grant/export-csv', 'AdminController@exxportCSVActiveGrants');
+Route::get('/survey-downvote/{id}/export-csv', 'AdminController@exportCSVDownvoteSurvey');
 
 
 
@@ -76,16 +79,18 @@ Route::group(['prefix' => 'shared', 'middleware' => ['auth:api']], function() {
 	Route::post('/check-login-2fa', 'SharedController@checkLogin2FA');
 	Route::post('/enable-2fa-login', 'SharedController@enable2FALogin');
 	Route::post('/disable-2fa-login', 'SharedController@disable2FALogin');
-	
+	Route::post('/resend-kyc-kangaroo', 'SharedController@resendKycKangaroo');
+
 	// PUT
 	Route::put('/proposal/{proposalId}', 'SharedController@updateProposal');
 	Route::put('/simple-proposal/{proposalId}', 'SharedController@updateSimpleProposal');
+	Route::put('/admin-grant-proposal/{proposalId}', 'SharedController@updateAdminGrantProposal');
 	Route::put('/proposal/{proposalId}/withdraw', 'SharedController@withdrawProposal');
 	Route::put('/proposal/{proposalId}/force-withdraw', 'SharedController@forceWithdrawProposal');
 	Route::put('/profile', 'SharedController@updateProfile');
 	Route::put('/profile-info', 'SharedController@updateProfileInfo');
 	Route::put('/account-info', 'SharedController@updateAccountInfo');
-	
+
 	// GET
 	Route::get('/completed-votes', 'SharedController@getCompletedVotes');
 	Route::get('/active-informal-votes', 'SharedController@getActiveInformalVotes');
@@ -98,6 +103,7 @@ Route::group(['prefix' => 'shared', 'middleware' => ['auth:api']], function() {
 	Route::get('/proposal/{proposalId}/changes', 'SharedController@getProposalChanges');
 	Route::get('/proposal/{proposalId}/change/{proposalChangeId}', 'SharedController@getSingleProposalChange');
 	Route::get('/proposal/{proposalId}/change/{proposalChangeId}/comments', 'SharedController@getProposalChangeComments');
+	Route::get('/proposal/{proposalId}/vote/{voteId}/vote-result/export-csv', 'SharedController@exportCSVProposal');
 	Route::get('/pending-proposals', 'SharedController@getPendingProposals');
 	Route::get('/active-proposals', 'SharedController@getActiveProposals');
 	Route::get('/all-proposals', 'SharedController@getAllProposals');
@@ -115,6 +121,7 @@ Route::group(['prefix' => 'user', 'middleware' => ['auth:api']], function() {
 	Route::post('/milestone', 'UserController@submitMilestone');
 	Route::post('/proposal', 'UserController@submitProposal');
 	Route::post('/simple-proposal', 'UserController@submitSimpleProposal');
+	Route::post('/admin-grant-proposal', 'UserController@submitAdminGrantProposal');
 	Route::post('/proposal-change', 'UserController@submitProposalChange');
 	Route::post('/proposal-change-comment', 'UserController@submitProposalChangeComment');
 	Route::post('/vote', 'UserController@submitVote');
@@ -130,14 +137,17 @@ Route::group(['prefix' => 'user', 'middleware' => ['auth:api']], function() {
 	Route::post('/check-first-completed-proposal', 'UserController@checkFirstCompletedProposal');
 	Route::post('/proposal-draft', 'UserController@submitDraftProposal');
 	Route::post('/proposal-draft/upload', 'UserController@uploadFiletDraftProposal');
+	Route::post('/survey/down-vote/{id}', 'UserController@submitDownVoteSurvey');
 	Route::post('/survey/{id}', 'UserController@submitSurvey');
+	Route::post('/send-kyc-kangaroo', 'UserController@sendKycKangaroo');
 	Route::post('/check-mentor', 'UserController@checkMentor');
 	Route::post('/reputation-daily-csv', 'UserController@settingDailyCSVReputation');
+	Route::post('/check-send-kyc', 'UserController@checkSendKyc');
 
 	// DELETE
 	Route::delete('/sponsor-code/{codeId}', 'UserController@revokeSponsorCode');
 	Route::delete('/proposal-draft/{id}', 'UserController@deleteDraftProposal');
-	
+
 	// PUT
 	Route::put('/payment-proposal/{proposalId}', 'UserController@updatePaymentProposal');
 	Route::put('/payment-proposal/{proposalId}/payment-intent', 'UserController@createPaymentIntent');
@@ -166,6 +176,7 @@ Route::group(['prefix' => 'user', 'middleware' => ['auth:api']], function() {
 	Route::get('/proposal-draft/{id}', 'UserController@getDraftProposalDetail');
 	Route::get('/current-survey', 'UserController@getCurentSurvey');
 	Route::get('/list-va', 'UserController@getListUserVA');
+	Route::get('/proposal/{proposalId}/milestone-not-submit', 'UserController@getMilestoneNotSubmit');
 
 });
 
@@ -197,15 +208,17 @@ Route::group(['prefix' => 'admin', 'middleware' => ['auth:api']], function() {
 	Route::get('/dos-fee', 'AdminController@getDosFee');
 	Route::get('/survey', 'AdminController@getSurvey');
 	Route::get('/survey/win', 'AdminController@getSurveyWin');
+	Route::get('/survey/downvote', 'AdminController@getSurveyDownvote');
 	Route::get('/survey/{id}', 'AdminController@getDetailSurvey');
 	Route::get('/survey/{id}/discussions', 'AdminController@getDisscustionVote');
+	Route::get('/survey/{id}/downvote/discussions', 'AdminController@getDisscustionDownvote');
 	Route::get('/survey/{id}/vote', 'AdminController@getVoteSurvey');
 	Route::get('/survey/{id}/user-vote/{userId}', 'AdminController@getVoteSurveyByUser');
 	Route::get('/survey/{id}/user-vote', 'AdminController@getListUserVoteSurvey');
 	Route::get('/survey/{id}/user-not-submit', 'AdminController@getNotSubmittedSurvey');
 	Route::get('/user/{userId}/proposal-mentor', 'AdminController@getMentorProposal');
-	
-	
+
+
 	// POST
 	Route::post('/formal-voting', 'AdminController@startFormalVoting');
 	Route::post('/formal-milestone-voting', 'AdminController@startFormalMilestoneVoting');
@@ -223,8 +236,11 @@ Route::group(['prefix' => 'admin', 'middleware' => ['auth:api']], function() {
 	Route::post('/survey', 'AdminController@submitSurvey');
 	Route::post('/survey/{id}/cancel', 'AdminController@cancelSurvey');
 	Route::post('/survey/{id}/send-reminder', 'AdminController@sendReminderSurvey');
-	Route::post('user/{userId}/shuftipro-id', 'AdminController@updateShuftiproId');
-	
+	Route::post('/resend-compliance-review', 'AdminController@resendComplianceEmail');
+    Route::post('user/{userId}/shuftipro-id', 'AdminController@updateShuftiproId');
+    Route::post('/send-kyc-kangaroo', 'AdminController@sendKycKangaroo');
+	Route::post('/survey/approve-downvote', 'AdminController@approveDowvote');
+
 	// DELETE
 	Route::delete('/emailer-admin/{adminId}', 'AdminController@deleteEmailerAdmin');
 
@@ -232,27 +248,27 @@ Route::group(['prefix' => 'admin', 'middleware' => ['auth:api']], function() {
 	Route::put('/emailer-trigger-admin/{recordId}', 'AdminController@updateEmailerTriggerAdmin');
 	Route::put('/emailer-trigger-user/{recordId}', 'AdminController@updateEmailerTriggerUser');
 	Route::put('/emailer-trigger-member/{recordId}', 'AdminController@updateEmailerTriggerMember');
-	
+
 	Route::put('/global-settings', 'AdminController@updateGlobalSettings');
-	
+
 	Route::put('/participant/{userId}/approve-request', 'AdminController@approveParticipantRequest');
 	Route::put('/participant/{userId}/deny-request', 'AdminController@denyParticipantRequest');
 	Route::put('/participant/{userId}/revoke', 'AdminController@revokeParticipant');
 	Route::put('/participant/{userId}/activate', 'AdminController@activateParticipant');
 	Route::put('/participant/{userId}/deny', 'AdminController@denyParticipant');
-	
+
 	Route::put('/pre-register/{recordId}/approve', 'AdminController@approvePreRegister');
 	Route::put('/pre-register/{recordId}/deny', 'AdminController@denyPreRegister');
-	
+
 	Route::put('/user/{userId}/allow-access', 'AdminController@allowAccessUser');
 	Route::put('/user/{userId}/deny-access', 'AdminController@denyAccessUser');
-	
+
 	Route::put('/user/{userId}/ban', 'AdminController@banUser');
 	Route::put('/user/{userId}/unban', 'AdminController@unbanUser');
 	Route::put('/user/{userId}/approve-kyc', 'AdminController@approveKYC');
 	Route::put('/user/{userId}/deny-kyc', 'AdminController@denyKYC');
 	Route::put('/user/{userId}/reset-kyc', 'AdminController@resetKYC');
-	
+
 	Route::put('/proposal/{proposalId}/approve', 'AdminController@approveProposal');
 	Route::put('/proposal/{proposalId}/deny', 'AdminController@denyProposal');
 	Route::put('/proposal/{proposalId}/approve-payment', 'AdminController@approveProposalPayment');
@@ -281,32 +297,32 @@ Route::group(['prefix' => 'ops', 'middleware' => ['auth:ops_api']], function() {
 	Route::get('/me', 'OpsController@getMeOps');
 
 	Route::prefix('/admin')->group(function () {
-		// POST 
+		// POST
 		Route::post('/users/create-pa-user', 'OpsController@createPAUser');
 		Route::post('/users/{id}/revoke', 'OpsController@revokeUser');
 		Route::post('/users/{id}/undo-revoke', 'OpsController@undoRevokeUser');
 		Route::post('/users/{id}/reset-password', 'OpsController@resetPassword');
-		Route::post('/milestone/{milestoneId}/assign', 'OpsController@MilestoneAssign');
-		Route::post('/milestone/{milestoneId}/unassign', 'OpsController@milestoneUnassign');
+		Route::post('/milestone/{milestoneReviewId}/assign', 'OpsController@MilestoneAssign');
+		Route::post('/milestone/{milestoneReviewId}/unassign', 'OpsController@milestoneUnassign');
 
 		// GET
 		Route::get('/users', 'OpsController@getListUser');
 		Route::get('/users/{id}/ip-histories', 'OpsController@getIpHistories');
 		Route::get('/milestone-job', 'OpsController@getListMilestoneJob');
 		Route::get('/users-pa', 'OpsController@getListUserPA');
-		Route::get('/milestone/{milestoneId}', 'OpsController@getMilestoneDetail');
+		Route::get('/milestone/{milestoneReviewId}', 'OpsController@getMilestoneDetail');
 		Route::get('/milestone-assigned', 'OpsController@getListMilestoneAssigned');
 	});
 
 	Route::prefix('/user')->group(function () {
 		// POST
-		Route::post('/milestone/{milestoneId}/submit-review', 'OpsController@submitReviewMilestone');
-		Route::post('/milestone/{milestoneId}/note', 'OpsController@updateNodeMilestoneReview');
+		Route::post('/milestone/{milestoneReviewId}/submit-review', 'OpsController@submitReviewMilestone');
+		Route::post('/milestone/{milestoneReviewId}/note', 'OpsController@updateNodeMilestoneReview');
 
 		// GET
 		Route::get('/all', 'OpsController@getUsers');
 		Route::get('/milestone-job', 'OpsController@myAssignJobMilestone');
-		Route::get('/milestone/{milestoneId}', 'OpsController@getMilestoneDetailAssign');
+		Route::get('/milestone/{milestoneReviewId}', 'OpsController@getMilestoneDetailAssign');
 	});
 
 	Route::prefix('/shared')->group(function () {
@@ -316,5 +332,5 @@ Route::group(['prefix' => 'ops', 'middleware' => ['auth:ops_api']], function() {
 		//post
 		Route::post('/check-current-password', 'OpsController@checkCurrentPassword');
 	});
-	
+
 });

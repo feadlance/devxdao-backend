@@ -33,6 +33,7 @@ use App\EmailerTriggerUser;
 use App\EmailerTriggerMember;
 
 use App\Mail\Confirmation;
+use Log;
 
 class InstallController extends Controller
 {
@@ -230,6 +231,16 @@ class InstallController extends Controller
                 'content' => 'Your simple proposal titled "[title]" has passed the [voteType] vote.'
             ],
             [
+                'title' => 'Admin Grant Vote Failed',
+                'subject' => 'You are now a voting associate!',
+                'content' => 'Way to go! You are now a voting associate! This comes with obligations, please watch your email and join discussions and make sure to vote when you get the alerts. For more answers, just ask in telegram.'
+            ],
+            [
+                'title' => 'Admin Grant Vote Passed',
+                'subject' => 'Your admin grant proposal has passed the vote',
+                'content' => 'Your admin grant proposal titled "[title]" has passed the [voteType] vote.'
+            ],
+            [
                 'title' => 'Pre-Register Approve',
                 'subject' => 'Notification',
                 'content' => 'You are invited to the Portal registration. <a href="[url]">Click here to go to the registration page.</a>'
@@ -342,7 +353,7 @@ class InstallController extends Controller
     }
 
     public function install() {
-        /* Setting Roles */
+		/* Setting Roles */
         $role = Role::where(['name' => 'admin'])->first();
         if (!$role) Role::create(['name' => 'admin']);
 
@@ -371,8 +382,11 @@ class InstallController extends Controller
             $user->last_name = 'Leap';
             $user->email = 'ledgerleapllc@gmail.com';
             $random_pw = Str::random(10);
-            Log::info($user->email.' password set: '.$random_pw);
             $user->password = Hash::make($random_pw);
+            Log::info('Created admin');
+            Log::info('Email: '.$user->email);
+            Log::info('Password: '.$random_pw);
+            Log::info('');
             $user->confirmation_code = 'admin';
             $user->email_verified = 1;
             $user->is_admin = 1;
@@ -407,8 +421,11 @@ class InstallController extends Controller
             $user->last_name = 'Admin';
             $user->email = 'wulf@wulfkaal.com';
             $random_pw = Str::random(10);
-            Log::info($user->email.' password set: '.$random_pw);
             $user->password = Hash::make($random_pw);
+            Log::info('Created admin');
+            Log::info('Email: '.$user->email);
+            Log::info('Password: '.$random_pw);
+            Log::info('');
             $user->confirmation_code = 'admin';
             $user->email_verified = 1;
             $user->is_admin = 1;
@@ -443,8 +460,11 @@ class InstallController extends Controller
             $user->last_name = 'Tlewis';
             $user->email = 'timothytlewis@gmail.com';
             $random_pw = Str::random(10);
-            Log::info($user->email.' password set: '.$random_pw);
             $user->password = Hash::make($random_pw);
+            Log::info('Created admin');
+            Log::info('Email: '.$user->email);
+            Log::info('Password: '.$random_pw);
+            Log::info('');
             $user->confirmation_code = 'admin';
             $user->email_verified = 1;
             $user->is_admin = 1;
@@ -479,8 +499,11 @@ class InstallController extends Controller
             $user->last_name = 'Messer';
             $user->email = 'timothy.messer@emergingte.ch';
             $random_pw = Str::random(10);
-            Log::info($user->email.' password set: '.$random_pw);
             $user->password = Hash::make($random_pw);
+            Log::info('Created admin');
+            Log::info('Email: '.$user->email);
+            Log::info('Password: '.$random_pw);
+            Log::info('');
             $user->confirmation_code = 'admin';
             $user->email_verified = 1;
             $user->is_admin = 1;
@@ -515,8 +538,11 @@ class InstallController extends Controller
             $user->last_name = 'Howe';
             $user->email = 'hhoweconsulting@gmail.com';
             $random_pw = Str::random(10);
-            Log::info($user->email.' password set: '.$random_pw);
             $user->password = Hash::make($random_pw);
+            Log::info('Created admin');
+            Log::info('Email: '.$user->email);
+            Log::info('Password: '.$random_pw);
+            Log::info('');
             $user->confirmation_code = 'admin';
             $user->email_verified = 1;
             $user->is_admin = 1;
@@ -551,8 +577,11 @@ class InstallController extends Controller
             $user->last_name = 'Baumann';
             $user->email = 'raphael.baumann@emergingte.ch';
             $random_pw = Str::random(10);
-            Log::info($user->email.' password set: '.$random_pw);
             $user->password = Hash::make($random_pw);
+            Log::info('Created admin');
+            Log::info('Email: '.$user->email);
+            Log::info('Password: '.$random_pw);
+            Log::info('');
             $user->confirmation_code = 'admin';
             $user->email_verified = 1;
             $user->is_admin = 1;
@@ -661,5 +690,5 @@ class InstallController extends Controller
                 $user->save();
             }
         }
-    }
+	}
 }

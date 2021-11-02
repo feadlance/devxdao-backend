@@ -12,38 +12,35 @@ use App\Setting;
 use App\Proposal;
 use App\Reputation;
 use App\OnBoarding;
-use App\FinalGrant;
 use App\EmailerTriggerAdmin;
 use App\EmailerTriggerUser;
 use App\EmailerAdmin;
-use Illuminate\Support\Str;
 
 use App\Http\Helper;
 
 use Carbon\Carbon;
 
 use App\Mail\AdminAlert;
-use App\Mail\ComplianceReview;
 use App\Mail\UserAlert;
-use App\Shuftipro;
+
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
-class CheckVote extends Command
+class CheckAdminGrantVote extends Command
 {
     /**
      * The name and signature of the console command.
      *
      * @var string
      */
-    protected $signature = 'vote:check';
+    protected $signature = 'admingrantvote:check';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Check Vote';
+    protected $description = 'Check Admin Grant Vote';
 
     /**
      * Create a new command instance.
@@ -56,8 +53,6 @@ class CheckVote extends Command
     }
 
     public function checkInformal($settings, $mins, $minMembers, $vote, $force = false) {
-        // Get Settings
-		$settings = Helper::getSettings();
         $start = Carbon::createFromFormat("Y-m-d H:i:s", $vote->created_at, "UTC");
         $start->addMinutes($mins);
         $today = Carbon::now('UTC');
@@ -69,6 +64,8 @@ class CheckVote extends Command
             $op = User::find($proposal->user_id);
             if (!$op) return;
 
+            $emailerData = Helper::getEmailerData();
+
             if ($vote->result_count < $minMembers) {
                 // Can't Proceed
                 $vote->status = 'completed';
@@ -76,7 +73,6 @@ class CheckVote extends Command
                 $vote->save();
 
                 // Emailer
-                $emailerData = Helper::getEmailerData();
                 Helper::triggerAdminEmail('Vote Complete with No Quorum', $emailerData, $proposal, $vote);
                 Helper::triggerUserEmail($op, 'Vote Recieved No Quorum', $emailerData, $proposal, $vote);
             } else {
@@ -87,37 +83,21 @@ class CheckVote extends Command
                 $vote->result = $result;
                 $vote->save();
 
-                $emailerData = Helper::getEmailerData();
-
                 if ($result == "success") {
-                    Helper::createGrantTracking($proposal->id, "Informal vote passed", 'informal_vote_passed');
-                    $shuftipro = Shuftipro::where('user_id', $proposal->user_id)->where('status', 'approved')->first();
-                    if ($shuftipro) {
-                        Helper::createGrantTracking($proposal->id, "KYC checks complete", 'kyc_checks_complete');
-                    }
-                    Helper::sendKycKangarooUser($op);
-                    // Emailer
-                    // Helper::triggerAdminEmail('Signatures Needed', $emailerData, $proposal);
-                    // Helper::triggerUserEmail($op, 'Passed Informal Grant Vote', $emailerData, $proposal, $vote);
-                    Helper::startOnboarding($proposal, $vote);
-                    // Onboarding Begins Automatically
-                    // if ( $settings['autostart_formal_votes'] == 'yes' ){
-                        //send mail complance admin
-                    // }
-                    // else {
-                    //     Helper::startOnboarding($proposal, $vote);
-                    // }
-                } else {
-                    Helper::triggerUserEmail($op, 'Failed Informal Grant Vote', $emailerData, $proposal, $vote);
+                    Helper::startFormalVote($vote);
+
+                    Helper::triggerUserEmail($op, 'Admin Grant Vote Passed', $emailerData, $proposal, $vote);
+                } else if ($result == "fail") {
+                    Helper::triggerUserEmail($op, 'Admin Grant Vote Failed', $emailerData, $proposal, $vote);
                 }
             }
         }
     }
 
     public function checkFormal($settings, $mins, $vote, $force = false) {
-        $quorumRate = (float) $settings['quorum_rate'];
+        $quorumRate = (float) $settings['quorum_rate_simple'];
         $voteInfomal = Vote::where('proposal_id', $vote->proposal_id)->where('type', 'informal')
-            ->where('content_type', 'grant')->first();
+            ->where('content_type', 'admin-grant')->first();
         $totalMembers =  $voteInfomal->result_count ?? 0;
         $minMembers = $totalMembers  * $quorumRate / 100;
         $minMembers = ceil($minMembers);
@@ -126,14 +106,13 @@ class CheckVote extends Command
         $today = Carbon::now('UTC');
 
         if ($start->lt($today) || $force) {
-            $proposal = Proposal::with('milestones')
-                                ->has('milestones')
-                                ->where('id', $vote->proposal_id)
-                                ->first();
-            if (!$proposal) return false;
+            $proposal = Proposal::find((int) $vote->proposal_id);
+            if (!$proposal) return;
 
             $op = User::find($proposal->user_id);
             if (!$op) return;
+
+            $emailerData = Helper::getEmailerData();
 
             if ($vote->result_count < $minMembers) {
                 // Can't Proceed
@@ -144,7 +123,6 @@ class CheckVote extends Command
                 Helper::clearVoters($vote);
 
                 // Emailer
-                $emailerData = Helper::getEmailerData();
                 Helper::triggerAdminEmail('Vote Complete with No Quorum', $emailerData, $proposal, $vote);
                 Helper::triggerUserEmail($op, 'Vote Recieved No Quorum', $emailerData, $proposal, $vote);
             } else {
@@ -155,23 +133,15 @@ class CheckVote extends Command
                 $vote->result = $result;
                 $vote->save();
 
-                $emailerData = Helper::getEmailerData();
-
                 if ($result == "success") {
-                    // Emailer
-                    Helper::triggerAdminEmail('Formal Vote Passed', $emailerData, $proposal, $vote);
-                    Helper::triggerUserEmail($op, 'Formal Grant Vote Passed', $emailerData, $proposal, $vote);
-
                     Helper::runWinnerFlow($proposal, $vote, $settings);
-                    Helper::startFinalGrant($proposal);
-                    $op = User::find($proposal->user_id);
-                    Helper::sendGrantHellosign($op, $proposal, $settings);
-                    Helper::createGrantTracking($proposal->id, "Passed Formal vote", 'passed_formal_vote');
-                } else {
-                    // Emailer
-                    Helper::triggerUserEmail($op, 'Formal Grant Vote Failed', $emailerData, $proposal, $vote);
+                    Helper::completeProposal($proposal);
 
+                    Helper::triggerUserEmail($op, 'Admin Grant Vote Passed', $emailerData, $proposal, $vote);
+                } else {
                     Helper::runLoserFlow($proposal, $vote, $settings);
+
+                    Helper::triggerUserEmail($op, 'Admin Grant Vote Failed', $emailerData, $proposal, $vote);
                 }
             }
         }
@@ -193,40 +163,31 @@ class CheckVote extends Command
         // Calculate Period
         if (
             !$settings ||
-            !$settings['time_informal'] ||
-            !$settings['time_unit_informal'] ||
-            !$settings['time_formal'] ||
-            !$settings['time_unit_formal'] ||
-            !$settings['pass_rate'] ||
-            !$settings['quorum_rate']
+            !$settings['time_simple'] ||
+            !$settings['time_unit_simple'] ||
+            !$settings['pass_rate_simple'] ||
+            !$settings['quorum_rate_simple']
         )
             return;
 
-        $minsInformal = $minsFormal = 0;
-        if ($settings['time_unit_informal'] == 'min')
-            $minsInformal = (int) $settings['time_informal'];
-        else if ($settings['time_unit_informal'] == 'hour')
-            $minsInformal = (int) $settings['time_informal'] * 60;
-        else if ($settings['time_unit_informal'] == 'day')
-            $minsInformal = (int) $settings['time_informal'] * 60 * 24;
-
-        if ($settings['time_unit_formal'] == 'min')
-            $minsFormal = (int) $settings['time_formal'];
-        else if ($settings['time_unit_formal'] == 'hour')
-            $minsFormal = (int) $settings['time_formal'] * 60;
-        else if ($settings['time_unit_formal'] == 'day')
-            $minsFormal = (int) $settings['time_formal'] * 60 * 24;
+        $mins = 0;
+        if ($settings['time_unit_simple'] == 'min')
+            $mins = (int) $settings['time_simple'];
+        else if ($settings['time_unit_simple'] == 'hour')
+            $mins = (int) $settings['time_simple'] * 60;
+        else if ($settings['time_unit_simple'] == 'day')
+            $mins = (int) $settings['time_simple'] * 60 * 24;
 
         // Calculate Min Members
         $totalMembers = Helper::getTotalMembers();
-        $quorumRate = (float) $settings['quorum_rate'];
+        $quorumRate = (float) $settings['quorum_rate_simple'];
 
         $minMembers = $totalMembers * $quorumRate / 100;
         $minMembers = ceil($minMembers);
 
         // Vote Records
         $informals = Vote::has('proposal')
-                        ->where('content_type', 'grant')
+                        ->where('content_type', 'admin-grant')
                         ->where('type', 'informal')
                         ->where('status', 'active')
                         ->orderBy('created_at', 'asc')
@@ -234,7 +195,7 @@ class CheckVote extends Command
                         ->get();
 
         $formals = Vote::has('proposal')
-                        ->where('content_type', 'grant')
+                        ->where('content_type', 'admin-grant')
                         ->where('type', 'formal')
                         ->where('status', 'active')
                         ->orderBy('created_at', 'asc')
@@ -244,8 +205,11 @@ class CheckVote extends Command
         if ($informals) {
             foreach ($informals as $informal) {
                 try {
-                    $this->checkInformal($settings, $minsInformal, $minMembers, $informal, $force);
+                    DB::beginTransaction();
+                    $this->checkInformal($settings, $mins, $minMembers, $informal, $force);
+                    DB::commit();
                 } catch (\Exception $ex) {
+                    DB::rollBack();
                     Log::error($ex->getMessage());
                 }
             }
@@ -254,8 +218,11 @@ class CheckVote extends Command
         if ($formals) {
             foreach ($formals as $formal) {
                 try {
-                    $this->checkFormal($settings, $minsFormal, $formal, $force);
+                    DB::beginTransaction();
+                    $this->checkFormal($settings, $mins, $formal, $force);
+                    DB::commit();
                 } catch (\Exception $ex) {
+                    DB::rollBack();
                     Log::error($ex->getMessage());
                 }
             }

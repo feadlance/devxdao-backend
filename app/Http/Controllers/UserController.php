@@ -37,6 +37,7 @@ use App\Reputation;
 use App\Shuftipro;
 use App\ShuftiproTemp;
 use App\SponsorCode;
+use App\log;
 
 use App\Mail\AdminAlert;
 use App\Mail\UserAlert;
@@ -49,6 +50,7 @@ use App\MilestoneReview;
 use App\ProposalDraft;
 use App\ProposalDraftFile;
 use App\Survey;
+use App\SurveyDownVoteResult;
 use App\SurveyResult;
 use Carbon\Carbon;
 use Maatwebsite\Excel\Facades\Excel;
@@ -101,6 +103,15 @@ class UserController extends Controller
 
 	    $embedded_request = new \HelloSign\EmbeddedSignatureRequest($request, $client_id);
 	    $response = $client->createEmbeddedSignatureRequest($embedded_request);
+
+		Helper::createHellosignLogging(
+			$user->id,
+			'Create Embedded Signature Request',
+			'create_embedded_signature_request',
+			json_encode([
+				'Subject' => "Program Associate Agreement",
+			])
+		);
 
 	    $signature_request_id = $response->getId();
 
@@ -253,7 +264,8 @@ class UserController extends Controller
 	}
 
 	// Get Onboardings
-	public function getOnboardings(Request $request) {
+	public function getOnboardings(Request $request)
+	{
 		$user = Auth::user();
 		$onboardings = [];
 
@@ -275,34 +287,37 @@ class UserController extends Controller
 		if ($user && $user->hasRole(['participant', 'member'])) {
 			// OnBoarding
 			$onboardings = OnBoarding::join('proposal', 'proposal.id', '=', 'onboarding.proposal_id')
-					->leftJoin('final_grant', 'onboarding.proposal_id', '=', 'final_grant.proposal_id')
-																->with(['proposal', 'proposal.bank', 'proposal.crypto', 'user', 'vote'])
-																->has('proposal')
-																->has('user')
-																->has('vote')
-																->where('onboarding.user_id', $user->id)
-																->where('onboarding.status', 'pending')
-																->where('final_grant.id', null)
-																->whereNotExists(function ($query){
-																	$query->select('id')
-																		->from('vote')
-																		->whereColumn('onboarding.proposal_id', 'vote.proposal_id')
-																		->where('vote.type', 'formal');
-																	})
-																->where(function ($query) use ($search) {
-																	if ($search) {
-																		$query->where('proposal.title', 'like', '%' . $search . '%')
-																					->orWhere('proposal.member_reason', 'like', '%' . $search . '%');
-																	}
-																})
-																->select([
-																	'onboarding.*',
-																	'proposal.include_membership'
-																])
-																->orderBy($sort_key, $sort_direction)
-																->offset($start)
-																->limit($limit)
-								                ->get();
+			->leftJoin('final_grant', 'onboarding.proposal_id', '=', 'final_grant.proposal_id')
+			->with([
+				'proposal', 'proposal.bank', 'proposal.crypto', 'user', 'user.shuftipro',
+				'user.shuftiproTemp', 'vote'
+			])
+			->has('proposal')
+			->has('user')
+			->has('vote')
+			->where('onboarding.user_id', $user->id)
+				->where('onboarding.status', 'pending')
+				// ->where('final_grant.id', null)
+				// ->whereNotExists(function ($query) {
+				// 	$query->select('id')
+				// 	->from('vote')
+				// 	->whereColumn('onboarding.proposal_id', 'vote.proposal_id')
+				// 	->where('vote.type', 'formal');
+				// })
+				->where(function ($query) use ($search) {
+					if ($search) {
+						$query->where('proposal.title', 'like', '%' . $search . '%')
+						->orWhere('proposal.member_reason', 'like', '%' . $search . '%');
+					}
+				})
+				->select([
+					'onboarding.*',
+					'proposal.include_membership'
+				])
+				->orderBy($sort_key, $sort_direction)
+				->offset($start)
+				->limit($limit)
+				->get();
 		}
 
 		return [
@@ -719,7 +734,14 @@ class UserController extends Controller
 			$proposal->status = 'approved';
 			$proposal->dos_amount = $dos_fee_amount;
 			$proposal->dos_cc_amount = $dos_fee_amount;
-			$proposal->save();
+            $proposal->save();
+
+            // Create Change Record
+			$proposalChange = new ProposalChange();
+			$proposalChange->proposal_id = $proposalId;
+			$proposalChange->user_id = $user->id;
+			$proposalChange->what_section = "general_discussion";
+			$proposalChange->save();
 
 			// Update Timestamp
 			$proposal->approved_at = $proposal->updated_at;
@@ -1296,6 +1318,12 @@ class UserController extends Controller
 	    $voteId = (int) $request->get('voteId');
 	    $type = $request->get('type');
 	    $value = (float) $request->get('value');
+		if($value <= 0) {
+			return [
+	    		'success' => false,
+	    		'message' => 'Invalid value'
+	    	];
+		}
 
 	    // Vote Check
 	    $vote = Vote::find($voteId);
@@ -1569,6 +1597,100 @@ class UserController extends Controller
 		return ['success' => false];
 	}
 
+	// Submit Simple Proposal
+	public function submitAdminGrantProposal(Request $request) {
+		$user = Auth::user();
+
+		if ($user && $user->hasRole('member')) {
+			// Validator
+			$validator = Validator::make($request->all(), [
+			'title' => 'required',
+			'total_grant' => 'required',
+			'things_delivered' => 'required',
+			'delivered_at' => 'required',
+			]);
+			if ($validator->fails()) {
+				return [
+					'success' => false,
+					'message' => 'Provide all the necessary information'
+				];
+			}
+
+			$title = $request->get('title');
+			$total_grant = $request->get('total_grant');
+			$things_delivered = $request->get('things_delivered');
+			$delivered_at = $request->get('delivered_at');
+			$extra_notes = $request->get('extra_notes');
+			$names = $request->get('names');
+			$files = $request->file('files');
+
+			$proposal = Proposal::where('title', $title)->first();
+			if ($proposal) {
+				return [
+					'success' => false,
+					'message' => "Proposal with the same title already exists"
+				];
+			}
+
+			// Creating Proposal
+			$proposal = new Proposal;
+			$proposal->title = $title;
+
+			$proposal->total_grant = $total_grant;
+			$proposal->things_delivered = $things_delivered;
+			$proposal->delivered_at = $delivered_at;
+			$proposal->extra_notes = $extra_notes;
+
+			$proposal->user_id = $user->id;
+			$proposal->type = "admin-grant";
+			$proposal->save();
+
+			// Add Files
+			if (
+				$files &&
+				$names &&
+				is_array($files) &&
+				is_array($names) &&
+				count($files) == count($names)
+			) {
+				for ($i = 0; $i < count($files); $i++) {
+					$file = $files[$i];
+					$name = $names[$i];
+
+					if ($file && $name) { // New File
+						$path = $file->store('proposal');
+						$url = Storage::url($path);
+
+						$proposalFile = new ProposalFile;
+						$proposalFile->proposal_id = $proposal->id;
+						$proposalFile->name = $name;
+						$proposalFile->path = $path;
+						$proposalFile->url = $url;
+						$proposalFile->save();
+					}
+				}
+			}
+
+			// Emailer
+			$emailerData = Helper::getEmailerData();
+			Helper::triggerAdminEmail('New Proposal', $emailerData);
+			Helper::triggerUserEmail($user, 'New Proposal', $emailerData);
+			
+			$pdf = PDF::loadView('proposal_pdf', compact('proposal'));
+			$fullpath = 'pdf/proposal/proposal_' . $proposal->id . '.pdf';
+			Storage::disk('local')->put($fullpath, $pdf->output());
+			$url = Storage::disk('local')->url($fullpath);
+			$proposal->pdf = $url;
+			$proposal->save();
+			return [
+				'success' => true,
+				'proposal' => $proposal
+			];
+		}
+
+		return ['success' => false];
+	}
+
 	// Check Sponsor Code
 	public function checkSponsorCode(Request $request) {
 		$user = Auth::user();
@@ -1726,8 +1848,8 @@ class UserController extends Controller
 			Helper::createGrantTracking($proposalId, "Milestone $position submitted", 'milestone_' .$position.'_submitted');
 			$setting = Helper::getSettings();
 			if ($setting['gate_new_milestone_votes'] == 'yes') {
-				$milestoneReview = MilestoneReview::where('milestone_id', $milestoneId)->first();
-				if ($milestoneReview && $milestoneReview->status != 'denied') {
+				$milestoneReview = MilestoneReview::where('milestone_id', $milestoneId)->orderBy('id', 'desc')->first();
+				if ($milestoneReview && ($milestoneReview->status == 'pending' || $milestoneReview->status == 'active')) {
 					return [
 						'success' => false,
 						'message' => "Cannot submit milestone because it's waiting for review!",
@@ -1736,22 +1858,20 @@ class UserController extends Controller
 				Helper::createMilestoneLog($milestoneId, $user->email, $user->id, 'OP', 'User submitted the work for review.');
 				$milestone->time_submit = $milestone->time_submit +1;
 				$milestone->save();
-				Helper::createMilestoneSubmitHistory($milestone, $user->id);
-				$statusReview = 'active';
-				if(!$milestoneReview) {
-					$milestoneReview = new MilestoneReview();
-					$statusReview = 'pending';
-				}
+				$statusReview = 'pending';
+				$milestoneReview = new MilestoneReview();
 				$milestoneReview->milestone_id = $milestoneId;
 				$milestoneReview->proposal_id = $proposalId;
 				$milestoneReview->status = $statusReview;
+				$milestoneReview->time_submit = $milestone->time_submit;
 				$milestoneReview->save();
+				Helper::createMilestoneSubmitHistory($milestone, $user->id, $milestoneReview->id);
 				return ['success' => true];
 			} else {
 				Helper::createMilestoneLog($milestoneId, $user->email, $user->id, 'OP', 'User submitted the work for review.');
 				$milestone->time_submit = $milestone->time_submit + 1;
 				$milestone->save();
-				Helper::createMilestoneSubmitHistory($milestone, $user->id);
+				Helper::createMilestoneSubmitHistory($milestone, $user->id, null);
 				$vote = Vote::where('proposal_id', $proposalId)
 					->where(
 						'type',
@@ -2168,7 +2288,7 @@ class UserController extends Controller
 			// save user
 			$user->press_dismiss = 1;
 			$user->save();
-			// save file 
+			// save file
 			$proposal_draft_id = $request->get('proposal_draft_id');
 			if($proposal_draft_id) {
 				$proposal_draft_files = ProposalDraftFile::where('proposal_draft_id', $proposal_draft_id)->get();
@@ -2186,7 +2306,11 @@ class UserController extends Controller
 			Helper::triggerAdminEmail('New Proposal', $emailerData);
 			Helper::triggerUserEmail($user, 'New Proposal', $emailerData);
 
-			Helper::createGrantTracking($proposal->id, "Proposal $proposal->id submitted", 'proposal_submitted');
+            Helper::createGrantTracking($proposal->id, "Proposal $proposal->id submitted", 'proposal_submitted');
+            $shuftipro = Shuftipro::where('user_id', $proposal->user_id)->where('status', 'approved')->first();
+            if ($shuftipro) {
+                Helper::createGrantTracking($proposal->id, "KYC checks complete", 'kyc_checks_complete');
+            }
 			return [
 				'success' => true,
 				'proposal' => $proposal
@@ -2426,7 +2550,7 @@ class UserController extends Controller
 	public function submitSurvey(Request $request, $id)
 	{
 		$user = Auth::user();
-		if ($user->hasRole('member')) {
+		if ($user->hasRole('member') || true) {
 			$survey = Survey::where('id', $id)->where('status', 'active')->first();
 			if (!$survey) {
 				return [
@@ -2435,25 +2559,41 @@ class UserController extends Controller
 				];
 			}
 			$survey_result = SurveyResult::where('survey_id', $survey->id)->where('user_id', $user->id)->count();
-			if ($survey_result > 0) {
+			$survey_downvote_result = SurveyDownVoteResult::where('survey_id', $survey->id)->where('user_id', $user->id)->count();
+			if ($survey_result > 0 || ($survey->downvote && $survey_downvote_result > 0)) {
 				return [
 					'success' => false,
 					'message' => 'You submmited survey'
 				];
 			}
-			$validator = Validator::make($request->all(), [
-				'responses.*.proposal_id' => 'required|numeric|min:1|distinct',
-				'responses.*.place_choice' => "required|numeric|distinct|min:1|max:$survey->number_response",
-			]);
+			$rule = [
+				'upvote_responses' => 'required|array',
+				'upvote_responses.*.proposal_id' => 'required|numeric|min:1|distinct',
+				'upvote_responses.*.place_choice' => "required|numeric|distinct|min:1|max:$survey->number_response",
+			];
+			if ($survey->downvote) {
+				$rule = array_merge($rule, [
+					'downvote_responses' => 'required|array',
+					'downvote_responses.*.proposal_id' => 'required|numeric|min:1|distinct',
+					'downvote_responses.*.place_choice' => "required|numeric|distinct|min:1|max:$survey->number_response",
+				]);
+			}
+			$validator = Validator::make($request->all(), $rule);
 			if ($validator->fails()) {
+				$errors = [];
+				foreach (collect($validator->errors()) as $field => $error) {
+					$errors[$field] = $error[0];
+				}
 				return [
 					'success' => false,
-					'message' => $validator->errors()
+					'message' => $errors
 				];
 			}
-			$datas = $request->responses;
-			$result = [];
-			foreach ($datas as $data) {
+
+			// Upvotes
+			$upvoteDatas = $request->upvote_responses ?? [];
+			$upvoteResult = [];
+			foreach ($upvoteDatas as $data) {
 				$proposal_id = $data['proposal_id'];
 				$proposal = Proposal::where('proposal.status', 'approved')->where('id', $proposal_id)
 					->doesntHave('votes')->first();
@@ -2468,10 +2608,37 @@ class UserController extends Controller
 				$data['survey_id'] = $id;
 				$data['created_at'] = now();
 				$data['updated_at'] = now();
-				array_push($result, $data);
+				array_push($upvoteResult, $data);
 			}
 			SurveyResult::where('survey_id', $id)->where('user_id', $user->id)->delete();
-			SurveyResult::insert($result);
+			SurveyResult::insert($upvoteResult);
+
+			// Downvotes
+			if ($survey->downvote) {
+				$downvoteDatas = $request->downvote_responses ?? [];
+				$downvoteResult = [];
+				foreach ($downvoteDatas as $data) {
+					$proposal_id = $data['proposal_id'];
+					$proposal = Proposal::where('proposal.status', 'approved')->where('id', $proposal_id)
+						->doesntHave('votes')->first();
+					if (!$proposal) {
+						return [
+							'success' => false,
+							'message' => "Proposal discusstion $proposal_id does not exist"
+						];
+					}
+					$data['point'] = Helper::getPointSurvey($data['place_choice']);
+					$data['user_id'] = $user->id;
+					$data['survey_id'] = $id;
+					$data['created_at'] = now();
+					$data['updated_at'] = now();
+					array_push($downvoteResult, $data);
+				}
+				SurveyDownVoteResult::where('survey_id', $id)->where('user_id', $user->id)->delete();
+				SurveyDownVoteResult::insert($downvoteResult);
+			}
+			
+			// Update submissions complete of survey
 			$survey->update(['user_responded' =>  $survey->user_responded + 1]);
 			return ['success' => true];
 		} else {
@@ -2483,8 +2650,15 @@ class UserController extends Controller
 	{
 		$user = Auth::user();
 		$survey = Survey::with(['surveyRanks' => function ($q) {
-			$q->orderBy('rank', 'desc');
-		}])->with(['surveyRanks.proposal'])->orderBy('created_at', 'desc')->first();
+				$q->orderBy('rank', 'desc');
+			}])
+			->with(['surveyRanks.proposal'])
+			->with(['surveyDownvoteRanks' => function ($q) {
+				$q->orderBy('rank', 'desc');
+			}])
+			->with(['surveyDownvoteRanks.proposal'])
+			->orderBy('created_at', 'desc')->first();
+
 		if (!$survey) {
 			return [
 				'success' => false,
@@ -2688,6 +2862,40 @@ class UserController extends Controller
 		];
 	}
 
+	public function sendKycKangaroo()
+	{
+		$user = Auth::user();
+		$shuftipro_temp = ShuftiproTemp::where('user_id', $user->id)->first();
+		$invite_id =  $shuftipro_temp->invite_id ?? null;
+		$shuftipro = Shuftipro::where('user_id', $user->id)->where('status', 'approved')->first();
+		if(!$shuftipro) {
+			ShuftiproTemp::where('user_id', $user->id)->delete();
+			$kyc_response = Helper::inviteKycKangaroo("$user->first_name $user->last_name", $user->email, $invite_id);
+			if(isset($kyc_response['success']) && $kyc_response['success'] == false) {
+				Helper::processKycKangaroo($kyc_response, $user->id);
+				return [
+					'success' => false,
+					'message' => $kyc_response['message'] ?? '',
+					'invite' => $kyc_response['invite'] ?? ''
+				];
+			}
+			$shuftipro_temp = new ShuftiproTemp();
+			$shuftipro_temp->user_id = $user->id;
+			$shuftipro_temp->reference_id = '';
+			$shuftipro_temp->status = 'booked';
+			$shuftipro_temp->invite_id = $kyc_response['invite_id'] ?? null;
+			$shuftipro_temp->invited_at = now();
+			$shuftipro_temp->save();
+			return [
+				'success' => true,
+			];
+		} else {
+			return [
+				'success' => false,
+			];
+		}
+	}
+
 	// Get Reputation Track
 	public function exportCSVReputationTrack(Request $request)
 	{
@@ -2759,5 +2967,90 @@ class UserController extends Controller
 			'success' => true,
 		];
 	}
- 
+
+	public function checkSendKyc() {
+		$user = Auth::user();
+		$user->check_send_kyc = 0;
+		$user->save();
+		return ['success' => true];
+	}
+
+	public function getMilestoneNotSubmit($proposalId)
+	{
+		$user = Auth::user();
+		$milestones = Milestone::where('milestone.proposal_id', $proposalId)
+			->doesntHave('votes')
+			->leftJoin('milestone_review', 'milestone.id', '=', 'milestone_review.milestone_id')
+			->where(function ($query) {
+				$query->where('milestone_review.status', 'denied')
+				->orWhere('milestone_review.status', null);
+			})
+			->select(['milestone.*'])
+			->orderBy('milestone.created_at', 'asc')
+			->get();
+		foreach ($milestones as $milestone) {
+			$milestone->milestone_posittion = Helper::getPositionMilestone($milestone);
+		}
+		return [
+			'success' => true,
+			'milestones' => $milestones,
+		];
+	}
+
+	public function submitDownVoteSurvey(Request $request, $id)
+	{
+		$user = Auth::user();
+		if ($user->hasRole('member')) {
+			$survey = Survey::where('id', $id)->where('status', 'active')->first();
+			if (!$survey) {
+				return [
+					'success' => false,
+					'message' => 'The survey not exist'
+				];
+			}
+			$survey_downvote_result = SurveyDownVoteResult::where('survey_id', $survey->id)->where('user_id', $user->id)->count();
+			if ($survey_downvote_result > 0) {
+				return [
+					'success' => false,
+					'message' => 'You submmited survey'
+				];
+			}
+			$validator = Validator::make($request->all(), [
+				'responses.*.proposal_id' => 'required|numeric|min:1|distinct',
+				'responses.*.place_choice' => "required|numeric|distinct|min:1|max:$survey->number_response",
+			]);
+			if ($validator->fails()) {
+				return [
+					'success' => false,
+					'message' => $validator->errors()
+				];
+			}
+			$datas = $request->responses;
+			$result = [];
+			foreach ($datas as $data) {
+				$proposal_id = $data['proposal_id'];
+				$proposal = Proposal::where('proposal.status', 'approved')->where('id', $proposal_id)
+					->doesntHave('votes')->first();
+				if (!$proposal) {
+					return [
+						'success' => false,
+						'message' => "Proposal discusstion $proposal_id does not exist"
+					];
+				}
+				$data['point'] = Helper::getPointSurvey($data['place_choice']);
+				$data['user_id'] = $user->id;
+				$data['survey_id'] = $id;
+				$data['created_at'] = now();
+				$data['updated_at'] = now();
+				array_push($result, $data);
+			}
+			SurveyDownVoteResult::where('survey_id', $id)->where('user_id', $user->id)->delete();
+			SurveyDownVoteResult::insert($result);
+			$survey->update(['user_responded' =>  $survey->user_responded + 1]);
+			return ['success' => true];
+		} else {
+			return ['success' => false];
+		}
+	}
+
 }

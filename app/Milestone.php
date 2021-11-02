@@ -33,7 +33,7 @@ class Milestone extends Model
 
 	public function milestoneReview()
 	{
-		return $this->hasOne('App\MilestoneReview', 'milestone_id');
+		return $this->hasMany('App\MilestoneReview', 'milestone_id');
 	}
 
 	public function milestoneCheckList()

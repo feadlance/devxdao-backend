@@ -170,7 +170,7 @@ class OpsController extends Controller
             $users = OpsUser::where('id', '!=', $user->id)
                 ->where(function ($query) use ($search) {
                     $query->where('ops_users.is_super_admin', 1)
-                        ->orwhere('ops_users.is_pa', 1);
+                        ->orWhere('ops_users.is_pa', 1);
                 })->where(function ($query) use ($search) {
                     if ($search) {
                         $query->where('ops_users.email', 'like', '%' . $search . '%');
@@ -307,7 +307,8 @@ class OpsController extends Controller
         $limit = isset($data['limit']) ? $data['limit'] : 10;
         $start = $limit * ($page_id - 1);
 
-        $milestones = MilestoneReview::where('milestone_review.status', 'pending')->with(['milestones'])
+        $milestones = MilestoneReview::where('milestone_review.status', 'pending')
+            ->with(['milestones', 'milestoneSubmitHistory'])
             ->join('milestone', 'milestone.id', '=', 'milestone_review.milestone_id')
             ->join('proposal', 'milestone.proposal_id', '=', 'proposal.id')
             ->join('users', 'proposal.user_id', '=', 'users.id')
@@ -315,13 +316,16 @@ class OpsController extends Controller
                 if ($search) {
                     $query->where('proposal.id', 'like', '%' . $search . '%')
                         ->orWhere('proposal.title', 'like', '%' . $search . '%')
-                        ->orwhere('ops_users.email', 'like', '%' . $search . '%');
+                        ->orWhere('users.email', 'like', '%' . $search . '%');
                 }
             })
             ->select([
+                'milestone.*',
                 'milestone_review.milestone_id',
                 'milestone_review.proposal_id',
-                'milestone.*',
+                'milestone_review.id as milestone_review_id',
+                'milestone_review.id as id',
+                'milestone_review.time_submit',
                 'proposal.title as proposal_title',
                 'users.id as user_id',
                 'users.email'
@@ -371,15 +375,15 @@ class OpsController extends Controller
         ];
     }
 
-    public function getMilestoneDetail($milestoneId)
+    public function getMilestoneDetail($milestoneReviewId)
     {
-        $milestone = Milestone::with([
-            'milestones', 'milestoneCheckList', 'proposal', 'proposal.members',
+        $milestone = MilestoneReview::with([ 'milestoneSubmitHistory' , 'milestoneCheckList',
+            'milestones', 'proposal', 'proposal.members',
             'proposal.grants', 'proposal.citations', 'proposal.citations.repProposal', 'proposal.citations.repProposal.user', 'proposal.files'
         ])
+            ->join('milestone', 'milestone.id', '=', 'milestone_review.milestone_id')
             ->join('proposal', 'milestone.proposal_id', '=', 'proposal.id')
             ->join('users', 'proposal.user_id', '=', 'users.id')
-            ->leftJoin('milestone_review', 'milestone.id', '=', 'milestone_review.milestone_id')
             ->leftJoin('ops_users as u1', 'u1.id', '=', 'milestone_review.assigner_id')
             ->select([
                 'milestone.*',
@@ -388,25 +392,33 @@ class OpsController extends Controller
                 'users.id as user_id',
                 'users.email',
                 'milestone_review.reviewed_at',
+                'milestone_review.id as milestone_review_id',
+                'milestone_review.id as id',
+                'milestone_review.milestone_id',
                 'milestone_review.assigner_id',
                 'milestone_review.assigned_at',
+                'milestone_review.time_submit',
                 'milestone_review.status as milestone_review_status',
                 'u1.email as assigner_email',
-            ])->where('milestone.id', $milestoneId)->first();
+            ])
+            ->where('milestone_review.id', $milestoneReviewId)->first();
         if ($milestone) {
             $milestone->support_file_url = $milestone->support_file ? asset($milestone->support_file) : null;
+            $previous_check_list = MilestoneCheckList::where('milestone_id', $milestone->milestone_id)->orderBy('created_at', 'desc')->first();
             return [
                 'success' => true,
-                'milestone' => $milestone
+                'milestone' => $milestone,
+                'previous_check_list' => $previous_check_list,
             ];
         }
+
         return [
             'success' => false,
             'message' => 'This milestone does not exist'
         ];
     }
 
-    public function milestoneAssign($milestoneId, Request $request)
+    public function milestoneAssign($milestoneReviewId, Request $request)
     {
         $admin = Auth::user();
         // Validator
@@ -426,13 +438,14 @@ class OpsController extends Controller
                 'message' => 'This user does not exist'
             ];
         }
-        $milestone_review = MilestoneReview::where('milestone_id', $milestoneId)->first();
+        $milestone_review = MilestoneReview::where('id', $milestoneReviewId)->first();
         if (!$milestone_review) {
             return [
                 'success' => false,
                 'message' => 'This milestone does not exist'
             ];
         }
+        $milestoneId = $milestone_review->milestone_id;
         $milestone_review->assigner_id = $request->user_id;
         $milestone_review->status = 'active';
         $milestone_review->assigned_at = now();
@@ -453,10 +466,10 @@ class OpsController extends Controller
         ];
     }
 
-    public function milestoneUnassign($milestoneId, Request $request)
+    public function milestoneUnassign($milestoneReviewId, Request $request)
     {
         $admin = Auth::user();
-        $milestone_review = MilestoneReview::where('milestone_id', $milestoneId)->where('status', 'active')->first();
+        $milestone_review = MilestoneReview::where('id', $milestoneReviewId)->where('status', 'active')->first();
         if (!$milestone_review) {
             return [
                 'success' => false,
@@ -483,7 +496,7 @@ class OpsController extends Controller
         $data = $request->all();
         if ($data && is_array($data)) extract($data);
 
-        if (!$sort_key) $sort_key = 'milestone.created_at';
+        if (!$sort_key) $sort_key = 'milestone_review.assigned_at';
         if (!$sort_direction) $sort_direction = 'desc';
         $page_id = (int) $page_id;
         if ($page_id <= 0) $page_id = 1;
@@ -492,7 +505,8 @@ class OpsController extends Controller
         $start = $limit * ($page_id - 1);
         $status = $request->status == 'completed' ? 'approved' : 'active';
 
-        $milestones = MilestoneReview::where('milestone_review.status', '!=', 'pending')->with(['milestones'])
+        $milestones = MilestoneReview::where('milestone_review.status', '!=', 'pending')
+            ->with(['milestones', 'milestoneSubmitHistory'])
             ->join('milestone', 'milestone.id', '=', 'milestone_review.milestone_id')
             ->join('proposal', 'milestone.proposal_id', '=', 'proposal.id')
             ->join('ops_users', 'milestone_review.assigner_id', '=', 'ops_users.id')
@@ -500,7 +514,7 @@ class OpsController extends Controller
                 if ($search) {
                     $query->where('proposal.id', 'like', '%' . $search . '%')
                         ->orWhere('proposal.title', 'like', '%' . $search . '%')
-                        ->orwhere('ops_users.email', 'like', '%' . $search . '%');
+                        ->orWhere('ops_users.email', 'like', '%' . $search . '%');
                 }
                 if ($status == 'active') {
                     $query->where('milestone_review.status', 'active');
@@ -509,11 +523,15 @@ class OpsController extends Controller
                 }
             })
             ->select([
+                'milestone.*',
                 'milestone_review.milestone_id',
                 'milestone_review.assigner_id',
                 'milestone_review.assigned_at',
+                'milestone_review.reviewed_at',
                 'milestone_review.status as milestone_review_status',
-                'milestone.*',
+                'milestone_review.id as milestone_review_id',
+                'milestone_review.id as id',
+                'milestone_review.time_submit',
                 'proposal.title as proposal_title',
                 'ops_users.email'
             ])
@@ -541,7 +559,7 @@ class OpsController extends Controller
         $data = $request->all();
         if ($data && is_array($data)) extract($data);
 
-        if (!$sort_key) $sort_key = 'milestone.created_at';
+        if (!$sort_key) $sort_key = 'milestone_review.assigned_at';
         if (!$sort_direction) $sort_direction = 'desc';
         $page_id = (int) $page_id;
         if ($page_id <= 0) $page_id = 1;
@@ -550,7 +568,8 @@ class OpsController extends Controller
         $start = $limit * ($page_id - 1);
         $status = $request->status == 'completed' ? 'approved' : 'active';
 
-        $milestones = MilestoneReview::where('milestone_review.status', '!=', 'pending')->with(['milestones'])
+        $milestones = MilestoneReview::where('milestone_review.status', '!=', 'pending')
+            ->with(['milestones', 'milestoneSubmitHistory'])
             ->join('milestone', 'milestone.id', '=', 'milestone_review.milestone_id')
             ->join('proposal', 'milestone.proposal_id', '=', 'proposal.id')
             ->join('ops_users', 'milestone_review.assigner_id', '=', 'ops_users.id')
@@ -558,7 +577,7 @@ class OpsController extends Controller
                 if ($search) {
                     $query->where('proposal.id', 'like', '%' . $search . '%')
                         ->orWhere('proposal.title', 'like', '%' . $search . '%')
-                        ->orwhere('ops_users.email', 'like', '%' . $search . '%');
+                        ->orWhere('ops_users.email', 'like', '%' . $search . '%');
                 }
                 if ($show_all != 1) {
                     $query->where('milestone_review.assigner_id', $user->id);
@@ -571,11 +590,14 @@ class OpsController extends Controller
             })
 
             ->select([
+                'milestone.*',
                 'milestone_review.milestone_id',
                 'milestone_review.assigner_id',
                 'milestone_review.assigned_at',
                 'milestone_review.status as milestone_review_status',
-                'milestone.*',
+                'milestone_review.id as milestone_review_id',
+                'milestone_review.id as id',
+                'milestone_review.time_submit',
                 'proposal.title as proposal_title',
                 'ops_users.email'
             ])
@@ -590,16 +612,16 @@ class OpsController extends Controller
         ];
     }
 
-    public function getMilestoneDetailAssign($milestoneId)
+    public function getMilestoneDetailAssign($milestoneReviewId)
     {
         $user = Auth::user();
-        $milestone = Milestone::with([
-            'milestones', 'milestoneCheckList', 'proposal', 'proposal.members',
+        $milestone = MilestoneReview::with([ 'milestoneSubmitHistory' , 'milestoneCheckList',
+            'milestones', 'proposal', 'proposal.members',
             'proposal.grants', 'proposal.citations', 'proposal.citations.repProposal', 'proposal.citations.repProposal.user', 'proposal.files'
         ])
+            ->join('milestone', 'milestone.id', '=', 'milestone_review.milestone_id')
             ->join('proposal', 'milestone.proposal_id', '=', 'proposal.id')
             ->join('users', 'proposal.user_id', '=', 'users.id')
-            ->join('milestone_review', 'milestone.id', '=', 'milestone_review.milestone_id')
             ->join('ops_users as u1', 'u1.id', '=', 'milestone_review.assigner_id')
             ->select([
                 'milestone.*',
@@ -610,13 +632,21 @@ class OpsController extends Controller
                 'milestone_review.reviewed_at',
                 'milestone_review.assigner_id',
                 'milestone_review.assigned_at',
+                'milestone_review.id as id',
+                'milestone_review.milestone_id',
                 'milestone_review.status as milestone_review_status',
+                'milestone_review.id as milestone_review_id',
+                'milestone_review.time_submit',
                 'u1.email as assigner_email',
-            ])->where('milestone.id', $milestoneId)->where('milestone_review.assigner_id', $user->id)->first();
+            ])->where('milestone_review.id', $milestoneReviewId)
+            ->where('milestone_review.assigner_id', $user->id)
+            ->first();
         if ($milestone) {
+            $previous_check_list = MilestoneCheckList::where('milestone_id', $milestone->milestone_id)->orderBy('created_at', 'desc')->first();
             return [
                 'success' => true,
-                'milestone' => $milestone
+                'milestone' => $milestone,
+                'previous_check_list' => $previous_check_list,
             ];
         }
         return [
@@ -625,7 +655,7 @@ class OpsController extends Controller
         ];
     }
 
-    public function submitReviewMilestone($milestoneId, Request $request)
+    public function submitReviewMilestone($milestoneReviewId, Request $request)
     {
         $user = Auth::user();
         // Validator
@@ -657,7 +687,7 @@ class OpsController extends Controller
         }
         $data = $validator->validated();
         $collection = collect($data);
-        $milestone_review = MilestoneReview::where('milestone_id', $milestoneId)->first();
+        $milestone_review = MilestoneReview::where('id', $milestoneReviewId)->first();
         if ($milestone_review && ($milestone_review->status == 'active')) {
             if ($user->is_super_admin != 1 && $milestone_review->assigner_id != $user->id) {
                 return [
@@ -665,6 +695,7 @@ class OpsController extends Controller
                     'message' => 'Cannot submit review milsetone',
                 ];
             }
+            $milestoneId = $milestone_review->milestone_id;
             $milestone = Milestone::find($milestoneId);
             $proposal = Proposal::find($milestone->proposal_id);
             $op = User::find($proposal->user_id);
@@ -692,9 +723,9 @@ class OpsController extends Controller
                 if (Helper::checkSendMailTriggerMember('Milestone code review Failed')) {
                     $title = "Your DEVxDAO Grant Milestone needs some work";
                     $body = "$op->first_name,<br> <br>Unfortunately your milestone submission needs a few adjustments before it can be considered for voting and payment.
-                    <br> <br> Please see the notes below and submit this milestone again in the DEVxDAO portal when these items are remedied. <br> <b> $note_fail </b> <br> 
+                    <br> <br> Please see the notes below and submit this milestone again in the DEVxDAO portal when these items are remedied. <br> <b> $note_fail </b> <br>
                     Thank you for being part of the program,  <br> <br>  DxD Program Management";
-                    Mail::to($op)->send(new UserAlert($title, $body)); 
+                    Mail::to($op)->send(new UserAlert($title, $body));
                 }
             }
             $milestone_review->status = $status;
@@ -703,8 +734,9 @@ class OpsController extends Controller
             $milestone_review->reviewed_at = now();
             $milestone_review->save();
             MilestoneCheckList::updateOrCreate(
-                ['milestone_id' => $milestoneId],
+                ['milestone_review_id' => $milestoneReviewId],
                 [
+                    'milestone_id' => $milestoneId,
                     'user_id' => $user->id,
                     'appl_accepted_definition' => $request->appl_accepted_definition,
                     'appl_accepted_pm' => $request->appl_accepted_pm,
@@ -763,7 +795,10 @@ class OpsController extends Controller
                     $emailerData = Helper::getEmailerData();
                     Helper::triggerUserEmail($user, 'Milestone Submitted', $emailerData);
 
-                    return ['success' => true];
+                    return [
+                        'success' => true,
+                        'milestone_review' => $milestone_review
+                    ];
                 } else {
                     // Re-Submit
                     $finalVote = Vote::where('proposal_id', $proposalId)
@@ -784,12 +819,21 @@ class OpsController extends Controller
                         $vote->milestone_id = $milestoneId;
                         $vote->save();
 
-                        return ['success' => true];
+                        return [
+                            'success' => true,
+                            'milestone_review' => $milestone_review
+                        ];
                     }
-                    return ['success' => true];
+                    return [
+                        'success' => true,
+                        'milestone_review' => $milestone_review
+                    ];
                 }
             } else {
-                return ['success' => true];
+                return [
+                    'success' => true,
+                    'milestone_review' => $milestone_review
+                ];
             }
         } else {
             return [
@@ -839,15 +883,17 @@ class OpsController extends Controller
         ];
     }
 
-    public function updateNodeMilestoneReview($milestoneId, Request $request)
+    public function updateNodeMilestoneReview($milestoneReviewId, Request $request)
     {
         $user = Auth::user();
-        $milestone_checklist = MilestoneCheckList::where('milestone_id', $milestoneId)->first();
+        $milestone_checklist = MilestoneCheckList::where('milestone_review_id', $milestoneReviewId)->first();
         if (!$milestone_checklist) {
             $milestone_checklist = new MilestoneCheckList();
         }
+        $milestoneReview = MilestoneReview::find($milestoneReviewId);
         $milestone_checklist->user_id = $user->id;
-        $milestone_checklist->milestone_id = $milestoneId;
+        $milestone_checklist->milestone_id = $milestoneReview->milestone_id;
+        $milestone_checklist->milestone_review_id = $milestoneReviewId;
         if ($request->crdao_acknowledged_project_notes)
             $milestone_checklist->crdao_acknowledged_project_notes = $request->crdao_acknowledged_project_notes;
         if ($request->crdao_accepted_pm_notes)

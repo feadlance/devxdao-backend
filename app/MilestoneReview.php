@@ -20,7 +20,6 @@ class MilestoneReview extends Model
         return Carbon::parse($value);
     }
 
-
     public function milestones() {
         return $this->hasMany('App\Milestone', 'proposal_id', 'proposal_id')->orderBy('id', 'asc');
     }
@@ -31,8 +30,12 @@ class MilestoneReview extends Model
 
     public function milestoneCheckList()
 	{
-		return $this->hasOne('App\MilestoneCheckList', 'milestone_id', 'milestone_id');
+		return $this->hasOne('App\MilestoneCheckList', 'milestone_review_id');
 	}
+
+    public function milestoneSubmitHistory() {
+        return $this->hasOne('App\MilestoneSubmitHistory', 'milestone_review_id');
+      }
 
     public function proposal()
 	{

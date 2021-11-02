@@ -18,25 +18,32 @@ use App\Reputation;
 use App\OnBoarding;
 use App\Citation;
 use App\FinalGrant;
+use App\GrantLog;
 use App\GrantTracking;
 use App\SponsorCode;
 use App\Signature;
+use App\HellosignLog;
 
 use App\Mail\AdminAlert;
 use App\Mail\UserAlert;
 
 use App\Jobs\MemberAlert;
+use App\Mail\ComplianceReview;
 use App\Milestone;
 use App\MilestoneLog;
 use App\MilestoneSubmitHistory;
 use App\RepHistory;
 use App\Shuftipro;
+use App\ShuftiproTemp;
 use App\SignatureGrant;
 use App\Survey;
 use App\SurveyResult;
 use Carbon\Carbon;
+use Exception;
+use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\DB;
-use PHPUnit\TextUI\Help;
+use Illuminate\Support\Facades\Log;
 
 class Helper
 {
@@ -459,7 +466,7 @@ class Helper
         // $voter->profile->save();
         Helper::updateRepProfile($voter->id, $rep);
         Helper::createRepHistory($item->user_id, $rep, $voter->profile->rep, 'Gained', 'Proposal Vote Result',$proposal->id, $vote->id, 'runLoserFlow');
-        
+
         // Stake Returned
         if ($value != 0) {
           Reputation::where('user_id', $voter->id)
@@ -720,6 +727,24 @@ class Helper
     // }
 
     $response = $client->sendTemplateSignatureRequest($request);
+
+    // Log when request to Hellosign
+    $signatures = SignatureGrant::where('proposal_id',  $proposal->id)->all();
+    Helper::createHellosignLogging(
+      $user->id,
+      'Send Signature Request',
+      'send_signature_request',
+      json_encode([
+        'Subject' => 'Membership Amendment',
+        'Signatures' => $signatures->only(['email', 'role', 'signed']),
+      ])
+    );
+
+    // Void the prior request when a new request is sent
+    if ($proposal->membership_signature_request_id) {
+      $client->cancelSignatureRequest($proposal->membership_signature_request_id);
+    }
+
     $signature_request_id = $response->getId();
 
     $proposal->membership_signature_request_id = $signature_request_id;
@@ -811,6 +836,24 @@ class Helper
     // }
 
     $response = $client->sendTemplateSignatureRequest($request);
+
+    // Log when request to Hellosign
+    $signatures = SignatureGrant::where('proposal_id',  $proposal->id)->all();
+    Helper::createHellosignLogging(
+      $user->id,
+      'Send Signature Request',
+      'send_signature_request',
+      json_encode([
+        'Subject' => 'Grant Agreement',
+        'Signatures' => $signatures->only(['email', 'role', 'signed']),
+      ])
+    );
+
+    // Void the prior request when a new request is sent
+    if ($proposal->signature_request_id) {
+      $client->cancelSignatureRequest($proposal->signature_request_id);
+    }
+
     $signature_request_id = $response->getId();
 
     $proposal->signature_request_id = $signature_request_id;
@@ -824,19 +867,33 @@ class Helper
   {
     if ($vote->type != "informal") return null;
 
+    $settings = self::getSettings();
     $onboarding = OnBoarding::where('proposal_id', $proposal->id)
-      ->where('vote_id', $vote->id)
+    ->where('vote_id', $vote->id)
       ->first();
     if (!$onboarding) {
-      $onboarding = new OnBoarding;
+      $token = Str::random(50);
+      try {
+        if ($settings['compliance_admin']) {
+          $title = "Proposal $proposal->id needs a compliance review";
+          $public_url = config('app.fe_url') . "/public-proposals/$proposal->id";
+          $approve_url = config('app.fe_url') . "/compliance-approve-grant/$proposal->id?token=$token";
+          $deny_url = config('app.fe_url') . "/compliance-deny-grant/$proposal->id?token=$token";
+          Mail::to($settings['compliance_admin'])->send(new ComplianceReview($title, $proposal, $public_url, $approve_url, $deny_url));
+        }
+      } catch (Exception $e) {
+        Log::info($e->getMessage());
+      }
+      $onboarding = new OnBoarding();
       $onboarding->proposal_id = $proposal->id;
       $onboarding->vote_id = $vote->id;
       $onboarding->user_id = $proposal->user_id;
       $onboarding->status = $status;
+      $onboarding->compliance_token = $token;
+      $onboarding->admin_email = $settings['compliance_admin'] ?? '';
+      $onboarding->compliance_status = 'pending';
       $onboarding->save();
-
       return $onboarding;
-      self::createGrantTracking($proposal->id, "Informal vote passed", 'informal_vote_passed');
     }
 
     return null;
@@ -1035,16 +1092,21 @@ class Helper
 
     $initialA = substr($user->first_name, 0, 1);
     $initialB = substr($user->last_name, 0, 1);
+    $fullName = implode(' ', array_filter([$initialA, $initialB]));
+    $fullAddress = implode(' ', array_filter([$profile->address, $profile->address2, $profile->city, $profile->zip]));
+    $shuftiproData = json_decode($shuftipro->data);
+    $shuftiproFullName = $shuftipro->address_result ? $shuftiproData->name->full_name : '';
+    $shuftiproAddress = $shuftipro->address_result ? $shuftiproData->address_document->full_address : $shuftiproData->profile_address;
+    $shuftiproCountry = $shuftipro->address_result ? $shuftiproData->address_document->country : $shuftiproData->country_company;
 
-    $full_address = "$profile->address $profile->address2 $profile->city $profile->zip";
-    $request->setCustomFieldValue('Initial', $initialA . ' ' . $initialB);
+    $request->setCustomFieldValue('Initial', $shuftiproFullName ? $shuftiproFullName : $fullName);
     $request->setCustomFieldValue('ProjectTitle', $proposal->title);
     $request->setCustomFieldValue('ProjectDescription', $proposal->short_description);
     $request->setCustomFieldValue('ProposalId', $proposal->id);
     $request->setCustomFieldValue('TotalGrant', number_format($proposal->total_grant, 2));
-    $request->setCustomFieldValue('Address', $full_address);
+    $request->setCustomFieldValue('Address', $shuftiproAddress ? $shuftiproAddress : $fullAddress);
     $request->setCustomFieldValue('Entity', $proposal->name_entity);
-    $request->setCustomFieldValue('From', $proposal->entity_country);
+    $request->setCustomFieldValue('From', $shuftiproCountry ? $shuftiproCountry : $proposal->entity_country);
     if ($shuftipro) {
       $request->setCustomFieldValue('ShuftiId', $shuftipro->reference_id);
     }
@@ -1110,10 +1172,37 @@ class Helper
     }
 
     $response = $client->sendTemplateSignatureRequest($request);
+
+    // Log when request to Hellosign
+    $signatures = SignatureGrant::where('proposal_id',  $proposal->id)->all();
+    Helper::createHellosignLogging(
+      $user->id,
+      'Send Signature Request',
+      'send_signature_request',
+      json_encode([
+        'Subject' => "Grant $proposal->id - Sign to activate DEVxDAO grant!",
+        'Signatures' => $signatures->only(['email', 'role', 'signed']),
+      ])
+    );
+
+    // Void the prior request when a new request is sent
+    if ($proposal->signature_grant_request_id) {
+      $client->cancelSignatureRequest($proposal->signature_grant_request_id);
+    }
+
     $signature_request_id = $response->getId();
 
     $proposal->signature_grant_request_id = $signature_request_id;
     $proposal->save();
+
+    Helper::createGrantLogging([
+      'proposal_id' => $proposal->id,
+      'final_grant_id' => $finalGrant->id,
+      'user_id' => null,
+      'email' => null,
+      'role' => 'system',
+      'type' => 'sent_doc',
+    ]);
 
     return $response;
   }
@@ -1370,16 +1459,47 @@ class Helper
     }
   }
 
+  public static function inviteKycKangaroo($invitation_name, $email, $invite_id = null)
+  {
+    $url = config('services.kyc_kangaroo.url') . '/api/devxdao/invite-user';
+    $response = Http::withHeaders([
+      'Content-Type' => 'application/json',
+      'Authorization' => 'Token ' . config('services.kyc_kangaroo.token')
+    ])->post($url, [
+      'invitation_name' => $invitation_name,
+      'email' => $email,
+      'invite_id' => $invite_id,
+    ]);
+    return $response->json();
+  }
+
+  public static function getInviteKycKangaroo($invite_id)
+  {
+    $url = config('services.kyc_kangaroo.url') . '/api/devxdao/get-invite';
+    $response = Http::withHeaders([
+      'Content-Type' => 'application/json',
+      'Authorization' => 'Token ' . config('services.kyc_kangaroo.token')
+    ])->get($url, [
+      'invite_id' => $invite_id,
+    ]);
+    return $response->json();
+  }
+
   public static function createGrantTracking($proposal_id, $event, $key)
   {
+    $grantTracking = GrantTracking::where('proposal_id', $proposal_id)->where('key', $key)->first();
+    if ($grantTracking) {
+        return;
+    }
     $grantTracking = new GrantTracking();
     $grantTracking->proposal_id = $proposal_id;
     $grantTracking->event = $event;
     $grantTracking->key = $key;
     $grantTracking->save();
+    return;
   }
 
-  public static function createMilestoneSubmitHistory($milestone, $user_id)
+  public static function createMilestoneSubmitHistory($milestone, $user_id, $milestone_review_id)
   {
     $milesontePosition = self::getPositionMilestone($milestone);
     $milestone_history = new MilestoneSubmitHistory();
@@ -1392,6 +1512,7 @@ class Helper
     $milestone_history->grant = $milestone->grant;
     $milestone_history->url = $milestone->url;
     $milestone_history->comment = $milestone->comment;
+    $milestone_history->milestone_review_id = $milestone_review_id;
     $milestone_history->save();
   }
 
@@ -1405,4 +1526,117 @@ class Helper
     }
     DB::commit();
   }
+
+  public static function processKycKangaroo($kyc_response, $user_id)
+  {
+    $invite = isset($kyc_response['invite']) ? $kyc_response['invite'] : null;
+    if (!$invite) {
+      return;
+    }
+    $shuftipro_temp = ShuftiproTemp::where('user_id', $user_id)->whereNotNull('invite_id')->first();
+    if (!$shuftipro_temp && isset($invite['invite_id']) && $invite['invite_id'] > 0) {
+      ShuftiproTemp::where('user_id', $user_id)->delete();
+      $shuftipro_temp = new ShuftiproTemp();
+      $shuftipro_temp->user_id = $user_id;
+      $shuftipro_temp->reference_id = $invite['shufti_ref_id'] ?? '';
+      $shuftipro_temp->status = 'booked';
+      $shuftipro_temp->invite_id = $invite['invite_id'] ?? null;
+      $shuftipro_temp->invited_at = $invite['invited_at'] ?? null;
+      $shuftipro_temp->save();
+    }
+
+    $status = $invite['status'] ?? null;
+    if ($status) {
+      $shuftipro = Shuftipro::where('user_id', $user_id)->first();
+      if (!$shuftipro) {
+        $shuftipro = new Shuftipro();
+      }
+      $shuftipro->reference_id = $invite['shufti_ref_id'] ?? '';
+      $shuftipro->status = $status;
+      $shuftipro->user_id = $user_id;
+      $shuftipro->is_successful = $invite['is_successful'] ?? 0;
+      $shuftipro->reviewed = $invite['reviewed'] ?? 0;
+      $data = json_encode([
+        'declined_reason' => $invite['declined_reason'] ?? null,
+        'event' => $invite['event'] ?? null,
+        'address_document' => $invite['address_document'] ?? null,
+        'profile_address' => $invite['profile_address'] ?? null,
+        'country_company' => $invite['country_company'] ?? null,
+        'api' => $invite['api'] ?? '',
+      ]);
+      $shuftipro->data = $data;
+      $shuftipro->address_result = isset($invite['address_document']) ? 1 : 0;
+      $shuftipro->save();
+      if ($status == 'approved') {
+        $onboardings = OnBoarding::where('user_id', $user_id)->where('status', 'pending')->where('compliance_status', 'approved')->get();
+        foreach ($onboardings as $onboarding) {
+          $onboarding->status = 'approved';
+          $onboarding->save();
+          $vote = Vote::find($onboarding->vote_id);
+          $proposal = Proposal::find($onboarding->proposal_id);
+          $op = User::find($onboarding->user_id);
+          $emailerData = Helper::getEmailerData();
+          if ($vote && $op && $proposal) {
+            Helper::triggerUserEmail($op, 'Passed Informal Grant Vote', $emailerData, $proposal, $vote);
+          }
+          Helper::startFormalVote($vote);
+        }
+        $proposals = Proposal::where('user_id', $user_id)->get();
+        foreach($proposals as $proposal) {
+            Helper::createGrantTracking($proposal->id, "KYC checks complete", 'kyc_checks_complete');
+        }
+      }
+    }
+  }
+
+  public static function createGrantLogging($data)
+  {
+    $data = (object) $data;
+
+    $grantLog = new GrantLog();
+    $grantLog->proposal_id = $data->proposal_id;
+    $grantLog->final_grant_id = $data->final_grant_id ?? null;
+    $grantLog->user_id = $data->user_id ?? null;
+    $grantLog->email = $data->email ?? null;
+    $grantLog->role = $data->role ? strtolower($data->role) : null;
+    $grantLog->type = strtolower($data->type);
+    $grantLog->save();
+  }
+
+  public static function createHellosignLogging($userId, $event, $key, $metadata)
+  {
+    $hellosignLog = new HellosignLog();
+    $hellosignLog->user_id = $userId;
+    $hellosignLog->event = $event;
+    $hellosignLog->key = $key;
+    $hellosignLog->metadata = $metadata;
+    $hellosignLog->save();
+  }
+
+  public static function sendKycKangarooUser($user)
+	{
+		$shuftipro_temp = ShuftiproTemp::where('user_id', $user->id)->first();
+		$invite_id =  $shuftipro_temp->invite_id ?? null;
+		$shuftipro = Shuftipro::where('user_id', $user->id)->where('status', 'approved')->first();
+		if(!$shuftipro) {
+			ShuftiproTemp::where('user_id', $user->id)->delete();
+            $kyc_response = Helper::inviteKycKangaroo("$user->first_name $user->last_name", $user->email, $invite_id);
+			if(isset($kyc_response['success']) && $kyc_response['success'] == false) {
+				Helper::processKycKangaroo($kyc_response, $user->id);
+				return ;
+			}
+			$shuftipro_temp = new ShuftiproTemp();
+			$shuftipro_temp->user_id = $user->id;
+			$shuftipro_temp->reference_id = '';
+			$shuftipro_temp->status = 'booked';
+			$shuftipro_temp->invite_id = $kyc_response['invite_id'] ?? null;
+			$shuftipro_temp->invited_at = now();
+			$shuftipro_temp->save();
+			return [
+				'success' => true,
+			];
+		} else {
+			return;
+		}
+	}
 }
