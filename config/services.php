@@ -56,4 +56,8 @@ return [
         'token' => env('KYC_KANGAROO_TOKEN'),
     ],
 
+    'external_api' => [
+        'token' => env('EXTERNAL_API_TOKEN'),
+    ],
+
 ];

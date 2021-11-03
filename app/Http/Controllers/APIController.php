@@ -32,6 +32,65 @@ use App\Mail\LoginTwoFA;
 
 class APIController extends Controller
 {
+  public function getVAmemberByEmail($email_address, Request $request)
+  {
+    $auth = Helper::authorizeExternalAPI();
+    if (!$auth) {
+      return [
+        'success' => false,
+        'message' => 'Unauthorized'
+      ];
+    }
+    if (
+      !$email_address ||
+      $email_address == '' ||
+      !filter_var($email_address, FILTER_VALIDATE_EMAIL)
+    ) {
+      return [
+        'success' => false,
+        'message' => 'Invalid email address'
+      ];
+    }
+
+    $user = DB::table('users')->join('profile', 'users.id', '=', 'profile.user_id')
+    ->where('users.is_member', 1)->where('users.email', $email_address)
+      ->select(['users.id as user_id', 'users.email', 'users.first_name', 'users.last_name', 'profile.forum_name'])
+      ->first();
+    if ($user) {
+      return [
+        'success' => true,
+        'user' => $user
+      ];
+    } else {
+      return [
+        'success' => false,
+        'message' => 'Record not found'
+      ];
+    }
+  }
+
+  public function getVAmembers(Request $request)
+  {
+    $auth = Helper::authorizeExternalAPI();
+    if (!$auth) {
+      return [
+        'success' => false,
+        'message' => 'Unauthorized'
+      ];
+    }
+
+    $users = DB::table('users')->join('profile', 'users.id', '=', 'profile.user_id')
+    ->where('users.is_member', 1)
+    ->select(['users.id as user_id', 'users.email', 'users.first_name', 'users.last_name', 'profile.forum_name'])
+    ->get();
+
+    return [
+      'success' => true,
+      'users' => $users
+    ];
+  }
+
+
   public function resetPassword(Request $request) {
     // Validator
     $validator = Validator::make($request->all(), [

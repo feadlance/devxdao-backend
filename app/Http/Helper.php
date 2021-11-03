@@ -47,6 +47,31 @@ use Illuminate\Support\Facades\Log;
 
 class Helper
 {
+  public static function authorizeExternalAPI() {
+    $headers = getallheaders();
+    $auth_token_header = (
+      $headers['Authorization'] ??
+      $headers['authorization'] ??
+      ''
+    );
+    $auth_token = explode(' ', $auth_token_header);
+    $auth_token_t = $auth_token[0];
+    $auth_token = $auth_token[1] ?? '';
+
+    if(
+      $auth_token_t != 'Token' &&
+      $auth_token_t != 'token'
+    ) {
+      return false;
+    }
+
+    if(hash_equals($auth_token, config('services.external_api.token'))) {
+      return true;
+    }
+
+    return false;
+  }
+
   // Upgrade to Voting Associate
   public static function upgradeToVotingAssociate($user)
   {

@@ -54,6 +54,10 @@ Route::get('/admin/user/{userId}/proposal-mentor/export-csv', 'AdminController@e
 Route::get('/admin/active-grant/export-csv', 'AdminController@exxportCSVActiveGrants');
 Route::get('/survey-downvote/{id}/export-csv', 'AdminController@exportCSVDownvoteSurvey');
 
+Route::group(['prefix' => 'va'], function() {
+	Route::get('/email/{email_address}', 'APIController@getVAmemberByEmail');
+	Route::get('/all', 'APIController@getVAmembers');
+});
 
 
 Route::group(['middleware' => ['auth:api']], function() {

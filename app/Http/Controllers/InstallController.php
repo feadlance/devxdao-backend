@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Log;
 use Spatie\Permission\Models\Role;
 
 use App\User;
@@ -33,7 +34,6 @@ use App\EmailerTriggerUser;
 use App\EmailerTriggerMember;
 
 use App\Mail\Confirmation;
-use Log;
 
 class InstallController extends Controller
 {
