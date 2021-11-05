@@ -69,6 +69,16 @@ class Proposal extends Model
     return $this->hasMany('App\MilestoneSubmitHistory', 'proposal_id');
   }
 
+  public function signtureGrants()
+	{
+		return $this->hasMany('App\SignatureGrant', 'proposal_id');
+	}
+
+  public function grantLogs()
+	{
+		return $this->hasMany('App\GrantLog', 'proposal_id');
+	}
+
   public function surveyDownVoteRanks() {
     return $this->hasMany('App\SurveyDownVoteRank', 'proposal_id');
   }

@@ -23,6 +23,7 @@ use App\GrantTracking;
 use App\SponsorCode;
 use App\Signature;
 use App\HellosignLog;
+use App\Invoice;
 
 use App\Mail\AdminAlert;
 use App\Mail\UserAlert;
@@ -1595,7 +1596,7 @@ class Helper
       if ($status == 'approved') {
         $onboardings = OnBoarding::where('user_id', $user_id)->where('status', 'pending')->where('compliance_status', 'approved')->get();
         foreach ($onboardings as $onboarding) {
-          $onboarding->status = 'approved';
+          $onboarding->status = 'completed';
           $onboarding->save();
           $vote = Vote::find($onboarding->vote_id);
           $proposal = Proposal::find($onboarding->proposal_id);
@@ -1664,4 +1665,32 @@ class Helper
 			return;
 		}
 	}
+
+  public static function queryGetInvoice($email, $proposalId, $startDate, $endDate, $search)
+  {
+    $query = Invoice::join('proposal', 'proposal.id', '=', 'invoice.proposal_id')
+      ->join('users', 'users.id', '=', 'invoice.payee_id')
+      ->join('milestone', 'milestone.id', '=', 'invoice.milestone_id')
+      ->where(function ($query) use ($proposalId, $email, $search, $startDate, $endDate) {
+        if ($email) {
+          $query->where('users.email', '=', $email);
+        }
+        if ($proposalId) {
+          $query->where('invoice.proposal_id', '=', $proposalId);
+        }
+        if ($startDate) {
+          $query->where('invoice.sent_at', '>=', $startDate);
+        }
+        if ($endDate) {
+          $query->where('invoice.sent_at', '<=', $endDate);
+        }
+        if ($search) {
+          $query->where('proposal.id', 'like', '%' . $search . '%')
+            ->orWhere('proposal.title', 'like', '%' . $search . '%')
+            ->orWhere('invoice.code', 'like', '%' . $search . '%')
+            ->orWhere('users.email', 'like', '%' . $search . '%');
+        }
+      });
+    return $query;
+  }
 }

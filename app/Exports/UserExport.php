@@ -26,6 +26,7 @@ class UserExport implements FromCollection, WithHeadings, WithMapping
     {
         $total_rep =  $user->total_rep != 0 ? number_format($user->total_rep, 5) . ' ' :  number_format('0', 5);
         return [
+            $user->id,
             $user->email,
             $user->telegram,
             $user->first_name,
@@ -40,6 +41,7 @@ class UserExport implements FromCollection, WithHeadings, WithMapping
     public function headings(): array
     {
         return [
+            'User Id',
             'Email',
             'Telegram',
             'First Name',

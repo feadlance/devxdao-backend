@@ -84,7 +84,7 @@ class KangarooCheck extends Command
                     if ($status == 'approved') {
                         $onboardings = OnBoarding::where('user_id', $record->user_id)->where('status', 'pending')->where('compliance_status', 'approved')->get();
                         foreach ($onboardings as $onboarding) {
-                            $onboarding->status = 'approved';
+                            $onboarding->status = 'completed';
                             $onboarding->save();
                             $vote = Vote::find($onboarding->vote_id);
                             $proposal = Proposal::find($onboarding->proposal_id);

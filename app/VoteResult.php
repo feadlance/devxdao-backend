@@ -15,4 +15,8 @@ class VoteResult extends Model
 	public function vote() {
 		return $this->hasOne('App\Vote', 'id', 'vote_id');
 	}
+
+	public function user() {
+		return $this->hasOne('App\User', 'id', 'user_id');
+	}
 }

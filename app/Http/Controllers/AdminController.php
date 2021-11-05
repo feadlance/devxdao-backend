@@ -44,9 +44,11 @@ use App\Exports\SurveyDownvoteExport;
 use App\Exports\SurveyVoteExport;
 use App\Exports\SurveyWinExport;
 use App\Exports\UserExport;
+use App\Exports\InvoiceExport;
 use App\Shuftipro;
 use App\ShuftiproTemp;
 use App\FinalGrant;
+use App\Invoice;
 
 use App\Http\Helper;
 use App\IpHistory;
@@ -1778,6 +1780,7 @@ class AdminController extends Controller
 				->where(function ($query) use ($search) {
 					if ($search) {
 						$query->where('users.email', 'like', '%' . $search . '%')
+							->orWhere('users.id', 'like', '%' . $search . '%')
 							->orWhere('users.first_name', 'like', '%' . $search . '%')
 							->orWhere('users.last_name', 'like', '%' . $search . '%')
 							->orWhere('profile.forum_name', 'like', '%' . $search . '%');
@@ -2064,17 +2067,24 @@ class AdminController extends Controller
 	public static function resendHellosignGrant($grantId)
 	{
 		$admin = Auth::user();
-		if ($admin && $admin->hasRole('admin')) {
+		if ($admin) {
 			$finalGrant = FinalGrant::with(['proposal', 'user'])
 				->has('proposal')
 				->has('user')
 				->where('id', $grantId)
-				->first();
+				->first();			
+			if (!$finalGrant || $finalGrant->status != "pending") {
+				return [
+					'success' => false,
+					'message' => 'Invalid grant'
+				];
+			}
+
 			$user = $finalGrant->user;
 			$proposal = $finalGrant->proposal;
 			$settings = Helper::getSettings();
 			$signature_grant_request_id = $finalGrant->proposal->signature_grant_request_id;
-			if (!$finalGrant || $finalGrant->status != "pending" || !$signature_grant_request_id) {
+			if (!$signature_grant_request_id) {
 				return [
 					'success' => false,
 					'message' => 'Invalid grant'
@@ -2128,14 +2138,20 @@ class AdminController extends Controller
 	{
 		try {
 			$admin = Auth::user();
-			if ($admin && $admin->hasRole('admin')) {
+			if ($admin) {
 				$finalGrant = FinalGrant::with(['proposal', 'user'])
 					->has('proposal')
 					->has('user')
 					->where('id', $grantId)
 					->first();
+				if (!$finalGrant || $finalGrant->status != "pending") {
+					return [
+						'success' => false,
+						'message' => 'Invalid grant'
+					];
+				}
 				$signature_grant_request_id = $finalGrant->proposal->signature_grant_request_id;
-				if (!$finalGrant || $finalGrant->status != "pending" || !$signature_grant_request_id) {
+				if (!$signature_grant_request_id) {
 					return [
 						'success' => false,
 						'message' => 'Invalid grant'
@@ -2212,7 +2228,7 @@ class AdminController extends Controller
 	public function getUrlFileHellosignGrant($grantId)
 	{
 		$admin = Auth::user();
-		if ($admin && $admin->hasRole('admin')) {
+		if ($admin) {
 			$finalGrant = FinalGrant::where('id', $grantId)->first();
 			if (!$finalGrant) {
 				return ['success' => false];
@@ -2278,7 +2294,8 @@ class AdminController extends Controller
 			->get();
 		return [
 			'success' => true,
-			'data' => $user
+			'data' => $user,
+			'finished' => count($user) < $limit ? true : false
 		];
 	}
 
@@ -2307,7 +2324,8 @@ class AdminController extends Controller
 
 		return [
 			'success' => true,
-			'data' => $user
+			'data' => $user,
+			'finished' => count($user) < $limit ? true : false
 		];
 	}
 
@@ -3729,7 +3747,7 @@ class AdminController extends Controller
 		Helper::createGrantTracking($proposalId, "ETA compliance complete", 'eta_compliance_complete');
 		$shuftipro = Shuftipro::where('user_id', $onboarding->user_id)->where('status', 'approved')->first();
 		if($shuftipro) {
-			$onboarding->status = 'approved';
+			$onboarding->status = 'completed';
 			$onboarding->save();
 			$vote = Vote::find($onboarding->vote_id);
 			$op = User::find($onboarding->user_id);
@@ -4412,5 +4430,69 @@ class AdminController extends Controller
 			$proposals = $proposals->sortByDesc($sort_key)->values();
 		}
 		return Excel::download(new SurveyDownvoteExport($proposals), 'survey_downvote.csv');
+	}
+
+	public function getVote($id)
+	{
+		$admin = Auth::user();
+		if ($admin) {
+			$vote = Vote::with([
+					'proposal',
+					'proposal.bank',
+				   	'proposal.crypto',
+				   	'proposal.grants',
+				   	'proposal.citations',
+				   	'proposal.citations.repProposal',
+				   	'proposal.citations.repProposal.user',
+				   	'proposal.citations.repProposal.user.profile',
+				   	'proposal.milestones',
+				   	'proposal.members',
+				   	'proposal.files',
+				])
+				->where('id', $id)
+				->first();
+			
+			return [
+				'success' => true,
+				'vote' => $vote,
+			];
+		}
+		return ['success' => false];
+	}
+
+	public function getVoteResult($id, Request $request)
+	{
+		$admin = Auth::user();
+		if ($admin) {
+			$voteResults = [];
+
+			// Variables
+			$sort_key = $sort_direction = '';
+			$page_id = 0;
+			$data = $request->all();
+			if ($data && is_array($data)) extract($data);
+
+			if (!$sort_key) $sort_key = 'vote_result.updated_at';
+			if (!$sort_direction) $sort_direction = 'desc';
+			$page_id = (int) $page_id;
+			if ($page_id <= 0) $page_id = 1;
+
+			$limit = isset($data['limit']) ? $data['limit'] : 10;
+			$start = $limit * ($page_id - 1);
+
+			$voteResults = VoteResult::with(['user', 'user.profile'])
+				->where('vote_id', $id)
+				->orderBy($sort_key, $sort_direction)
+				->offset($start)
+				->limit($limit)
+				->get();
+
+			return [
+				'success' => true,
+				'vote_results' => $voteResults,
+				'finished' => count($voteResults) < $limit ? true : false
+			];
+		}
+		return ['success' => false];
 	}
 }

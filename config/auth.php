@@ -52,6 +52,12 @@ return [
             'provider' => 'ops_users',
             'hash' => false,
         ],
+
+        'compliance_api' => [
+            'driver' => 'passport',
+            'provider' => 'compliance_users',
+            'hash' => false,
+        ],
     ],
 
     /*
@@ -80,6 +86,11 @@ return [
         'ops_users' => [
             'driver' => 'eloquent',
             'model' => App\OpsUser::class,
+        ],
+
+        'compliance_users' => [
+            'driver' => 'eloquent',
+            'model' => App\ComplianceUser::class,
         ],
 
         // 'users' => [

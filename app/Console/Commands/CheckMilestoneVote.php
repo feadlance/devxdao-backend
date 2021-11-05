@@ -14,6 +14,7 @@ use App\Reputation;
 use App\OnBoarding;
 use App\FinalGrant;
 use App\Milestone;
+use App\Invoice;
 use App\EmailerTriggerAdmin;
 use App\EmailerTriggerUser;
 use App\EmailerAdmin;
@@ -158,6 +159,14 @@ class CheckMilestoneVote extends Command
                             //     Helper::sendMembershipHellosign($op, $proposal, $settings);
                         }
                         $finalGrant->save();
+                        $invoice = new Invoice();
+                        $invoice->code = "$proposal->id-$milestonePosition";
+                        $invoice->proposal_id = $proposal->id;
+                        $invoice->milestone_id = $milestone->id;
+                        $invoice->payee_id = $op->id;
+                        $invoice->payee_email = $op->email;
+                        $invoice->sent_at = now();
+                        $invoice->save();
                     }
                 } else {
                     Helper::createMilestoneLog($vote->milestone_id, null, null, 'System', 'Vote failed');
