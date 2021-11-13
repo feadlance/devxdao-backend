@@ -1675,7 +1675,7 @@ class UserController extends Controller
 			$emailerData = Helper::getEmailerData();
 			Helper::triggerAdminEmail('New Proposal', $emailerData);
 			Helper::triggerUserEmail($user, 'New Proposal', $emailerData);
-			
+
 			$pdf = PDF::loadView('proposal_pdf', compact('proposal'));
 			$fullpath = 'pdf/proposal/proposal_' . $proposal->id . '.pdf';
 			Storage::disk('local')->put($fullpath, $pdf->output());
@@ -1689,7 +1689,101 @@ class UserController extends Controller
 		}
 
 		return ['success' => false];
-	}
+    }
+
+    public function submitAdvancePaymentProposal(Request $request)
+    {
+		$user = Auth::user();
+		if ($user && $user->hasRole('member')) {
+			// Validator
+			$validator = Validator::make($request->all(), [
+                'total_grant' => 'required',
+                'proposal_id' => 'required',
+                'amount_advance_detail' => 'required',
+			]);
+			if ($validator->fails()) {
+				return [
+					'success' => false,
+					'message' => 'Provide all the necessary information'
+				];
+			}
+            $proposalRequest = Proposal::where('status', '!=', 'completed')->where('id', $request->proposal_id)->first();
+            if(!$proposalRequest ) {
+                return [
+					'success' => false,
+					'message' => 'Provide request invalid'
+				];
+            }
+			$names = $request->get('names');
+			$files = $request->file('files');
+            $title = "Payment advance for grant $request->proposal_id";
+			$proposal = Proposal::where('title', $title)->first();
+			if ($proposal) {
+				return [
+					'success' => false,
+					'message' => "Proposal with the same title already exists"
+				];
+			}
+
+			// Creating Proposal
+			$proposal = new Proposal;
+			$proposal->title = $title;
+			$proposal->total_grant = $request->total_grant;
+			$proposal->proposal_request_payment = $request->proposal_id;
+			$proposal->amount_advance_detail = $request->amount_advance_detail;
+			$proposal->user_id = $user->id;
+			$proposal->type = "advance-payment";
+			$proposal->proposal_advance_status = "requested";
+			$proposal->save();
+
+			$proposalRequest->proposal_request_from = $proposal->id;
+			$proposalRequest->save();
+
+			// Add Files
+			if (
+				$files &&
+				$names &&
+				is_array($files) &&
+				is_array($names) &&
+				count($files) == count($names)
+			) {
+				for ($i = 0; $i < count($files); $i++) {
+					$file = $files[$i];
+					$name = $names[$i];
+
+					if ($file && $name) { // New File
+						$path = $file->store('proposal');
+						$url = Storage::url($path);
+
+						$proposalFile = new ProposalFile;
+						$proposalFile->proposal_id = $proposal->id;
+						$proposalFile->name = $name;
+						$proposalFile->path = $path;
+						$proposalFile->url = $url;
+						$proposalFile->save();
+					}
+				}
+			}
+
+			// Emailer
+			$emailerData = Helper::getEmailerData();
+			Helper::triggerAdminEmail('New Proposal', $emailerData);
+			Helper::triggerUserEmail($user, 'New Proposal', $emailerData);
+
+			$pdf = PDF::loadView('proposal_pdf', compact('proposal'));
+			$fullpath = 'pdf/proposal/proposal_' . $proposal->id . '.pdf';
+			Storage::disk('local')->put($fullpath, $pdf->output());
+			$url = Storage::disk('local')->url($fullpath);
+			$proposal->pdf = $url;
+			$proposal->save();
+			return [
+				'success' => true,
+				'proposal' => $proposal
+			];
+		}
+
+		return ['success' => false];
+    }
 
 	// Check Sponsor Code
 	public function checkSponsorCode(Request $request) {
@@ -2637,7 +2731,7 @@ class UserController extends Controller
 				SurveyDownVoteResult::where('survey_id', $id)->where('user_id', $user->id)->delete();
 				SurveyDownVoteResult::insert($downvoteResult);
 			}
-			
+
 			// Update submissions complete of survey
 			$survey->update(['user_responded' =>  $survey->user_responded + 1]);
 			return ['success' => true];
@@ -2789,7 +2883,7 @@ class UserController extends Controller
 				$total_voted = VoteResult::join('vote', 'vote.id', '=', 'vote_result.vote_id')
 				->where('vote_result.user_id', $user->id)->where('vote.type', 'informal')
 				->where('vote.result', '!=', 'no-quorum')->where('vote.created_at', '>=', $member_at)->count();
-			$user->total_vote_percent = $total_voted > 0 ? ($total_voted / $total_informal_votes) * 100 : 0 ;
+			$user->total_vote_percent = $total_informal_votes > 0 ? ($total_voted / $total_informal_votes) * 100 : 0 ;
 			$total_staked = DB::table('reputation')
 			->where('user_id', $user->id)
 				->where('type', 'Staked')
@@ -2824,7 +2918,7 @@ class UserController extends Controller
 					$query->whereDate('vote.created_at', '<=', $lastDayofPreviousMonth);
 				}
 			})->count();
-			$user->last_month_vote_percent = $last_month_voted > 0 ? ($last_month_voted / $last_month_informal_votes) * 100 : 0 ;
+			$user->last_month_vote_percent = $last_month_informal_votes > 0 ? ($last_month_voted / $last_month_informal_votes) * 100 : 0 ;
 
 			$firstDayofMonth = Carbon::now()->startOfMonth()->format('Y-m-d');
 			$start_date = $member_at >= $firstDayofMonth  ?  $member_at : $firstDayofMonth;
@@ -3051,6 +3145,36 @@ class UserController extends Controller
 		} else {
 			return ['success' => false];
 		}
+	}
+
+	public function getProposalRequestPayment(Request $request)
+	{
+        $user = Auth::user();
+		$propossal_request_payment_ids = Proposal::whereNotNull('proposal_request_payment')->pluck('proposal_request_payment');
+		$propossal_request_from_ids = Proposal::whereNotNull('proposal_request_from')->pluck('proposal_request_from');
+		$proposals = Proposal::where('status', '!=', 'completed')->where('type', 'grant')->where('user_id', $user->id)
+			->whereNotIn('id',$propossal_request_payment_ids->toArray())
+			->whereNotIn('id', $propossal_request_from_ids->toArray())
+			->get();
+		return [
+			'success' => true,
+			'proposals' => $proposals,
+		];
+
+	}
+
+	public function checkShowUnvotedInformal(Request $request) {
+		$user = Auth::user();
+		$user->show_unvoted_informal = $request->check;
+		$user->save();
+		return ['success' => true];
+	}
+
+	public function checkShowUnvotedFormal(Request $request) {
+		$user = Auth::user();
+		$user->show_unvoted_formal = $request->check;
+		$user->save();
+		return ['success' => true];
 	}
 
 }

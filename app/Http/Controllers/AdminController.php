@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\App;
 
 use App\User;
 use App\PreRegister;
@@ -67,6 +68,8 @@ use App\SurveyDownVoteResult;
 use App\SurveyRank;
 use App\SurveyResult;
 use Carbon\Carbon;
+use Exception;
+use Illuminate\Support\Facades\Log;
 use Maatwebsite\Excel\Facades\Excel;
 use Spatie\Permission\Models\Permission;
 
@@ -981,8 +984,9 @@ class AdminController extends Controller
 			$proposal = Proposal::find($proposalId);
 
 			if ($proposal) {
-				if ($proposal->type == 'admin-grant') {
-					$proposal->status = 'approved';
+				if ($proposal->type == 'admin-grant' || $proposal->type == 'advance-payment') {
+                    $proposal->status = 'approved';
+
 					$proposal->save();
 					$proposal->approved_at = $proposal->updated_at;
 					$proposal->save();
@@ -2072,7 +2076,7 @@ class AdminController extends Controller
 				->has('proposal')
 				->has('user')
 				->where('id', $grantId)
-				->first();			
+				->first();
 			if (!$finalGrant || $finalGrant->status != "pending") {
 				return [
 					'success' => false,
@@ -2084,12 +2088,6 @@ class AdminController extends Controller
 			$proposal = $finalGrant->proposal;
 			$settings = Helper::getSettings();
 			$signature_grant_request_id = $finalGrant->proposal->signature_grant_request_id;
-			if (!$signature_grant_request_id) {
-				return [
-					'success' => false,
-					'message' => 'Invalid grant'
-				];
-			}
 
 			Helper::createGrantLogging([
 				'proposal_id' => $finalGrant->proposal_id,
@@ -2100,19 +2098,26 @@ class AdminController extends Controller
 				'type' => 'resent',
 			]);
 
-			$client = new \HelloSign\Client(config('services.hellosign.api_key'));
-			$client->cancelSignatureRequest($signature_grant_request_id);
-
-			// Log when request to Hellosign
-			$signatures = SignatureGrant::where('proposal_id',  $finalGrant->proposal_id)->all();
-			Helper::createHellosignLogging(
-				$admin->id,
-				'Cancel Signature Request',
-				'cancel_signature_request',
-				json_encode([
-					'Signatures' => $signatures->only(['email', 'role', 'signed']),
-				])
-			);
+			if ($signature_grant_request_id) {
+				try {
+					$client = new \HelloSign\Client(config('services.hellosign.api_key'));
+					$client->cancelSignatureRequest($signature_grant_request_id);
+	
+					// Log when request to Hellosign
+					$signatures = SignatureGrant::where('proposal_id',  $finalGrant->proposal_id)->all();
+					Helper::createHellosignLogging(
+						$admin->id,
+						'Cancel Signature Request',
+						'cancel_signature_request',
+						json_encode([
+							'Signatures' => $signatures->only(['email', 'role', 'signed']),
+						])
+					);
+				} catch (Exception $e) {
+					Log::info($e->getMessage());
+				}
+				
+			}
 
 			SignatureGrant::where('proposal_id', $finalGrant->proposal_id)
 				->update(['signed' => 0]);
@@ -3731,6 +3736,7 @@ class AdminController extends Controller
 				'message' => 'Provide all the necessary information'
 			];
 		}
+		$settings = Helper::getSettings();
 		$proposalId = $request->proposalId;
 		$proposal = Proposal::find($proposalId);
 		$onboarding  = OnBoarding::where('proposal_id', $proposalId)->where('compliance_token', $request->token)->first();
@@ -3740,7 +3746,17 @@ class AdminController extends Controller
 				'message' => 'Proposal does not exist'
 			];
 		}
-		$settings = Helper::getSettings();
+		if (in_array($onboarding->compliance_status, ['denied', 'approved'])) {
+			return [
+				'success' => false,
+				'message' => "Can not perform this action. Proposal has been $onboarding->compliance_status",
+				"data" => [
+					'proposal' => $proposal,
+					'onboarding' => $onboarding,
+					'compliance_admin' => $settings['compliance_admin'],
+				]
+			];
+		}
 		$onboarding->compliance_status = 'approved';
 		$onboarding->compliance_reviewed_at = now();
 		$onboarding->save();
@@ -3778,6 +3794,7 @@ class AdminController extends Controller
 				'message' => 'Provide all the necessary information'
 			];
 		}
+		$settings = Helper::getSettings();
 		$proposalId = $request->proposalId;
 		$proposal = Proposal::find($proposalId);
 		$onboarding  = OnBoarding::where('proposal_id', $proposalId)->where('compliance_token', $request->token)->first();
@@ -3787,7 +3804,17 @@ class AdminController extends Controller
 				'message' => 'Proposal does not exist'
 			];
 		}
-		$settings = Helper::getSettings();
+		if (in_array($onboarding->compliance_status, ['denied', 'approved'])) {
+			return [
+				'success' => false,
+				'message' => "Can not perform this action. Proposal has been $onboarding->compliance_status",
+				'data' => [
+					'proposal' => $proposal,
+					'onboarding' => $onboarding,
+					'compliance_admin' => $settings['compliance_admin'],
+				]
+			];
+		}
 		$onboarding->compliance_status = 'denied';
 		$onboarding->compliance_reviewed_at = now();
 		$onboarding->deny_reason = $request->reason;
@@ -3860,6 +3887,7 @@ class AdminController extends Controller
 		return [
 			'success' => true,
 			'proposals' => $response,
+			'finished' => count($response) < $limit ? true : false
 		];
 	}
 
@@ -4233,6 +4261,7 @@ class AdminController extends Controller
 		return [
 			'success' => true,
 			'proposals' => $response,
+			'finished' => count($response) < $limit ? true : false
 		];
 	}
 
@@ -4451,7 +4480,7 @@ class AdminController extends Controller
 				])
 				->where('id', $id)
 				->first();
-			
+
 			return [
 				'success' => true,
 				'vote' => $vote,
@@ -4495,4 +4524,30 @@ class AdminController extends Controller
 		}
 		return ['success' => false];
 	}
+
+	public function getProposalPdfUrl($proposalId)
+    {
+		$admin = Auth::user();
+		if ($admin && $admin->hasRole('admin')) {
+			$proposal = Proposal::with(['milestones'])->where('id', $proposalId)->first();
+			if (!$proposal) {
+				return [
+					'success' => false,
+					'message' => 'Proposal not found'
+				];
+			}
+	
+			$pdf = App::make('dompdf.wrapper');
+        	$pdf->loadView('pdf.proposal', compact('proposal'));
+			$fullpath = 'pdf/proposal/proposal_detail_' . $proposal->id . '.pdf';
+			Storage::disk('local')->put($fullpath, $pdf->output());
+			$url = Storage::disk('local')->url($fullpath);
+	
+			return [
+				'success' => true,
+				'pdf_link_url' => $url
+			];
+		}
+		return ['success' => false];
+    }
 }

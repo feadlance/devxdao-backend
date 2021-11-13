@@ -257,10 +257,10 @@ class APIController extends Controller
       }
 
       // Generate Token and Return
-      Token::where([
-        'user_id' => $user->id,
-        'name' => 'User Access Token'
-      ])->delete();
+      // Token::where([
+      //   'user_id' => $user->id,
+      //   'name' => 'User Access Token'
+      // ])->delete();
 
       $user->last_login_ip_address = request()->ip();
       $user->last_login_at = now();
@@ -615,6 +615,7 @@ class APIController extends Controller
       
       // check grant active
       $user->grant_active = Helper::checkPendingFinalGrant($user);
+      $user->grant_proposal = Helper::checkGrantProposal($user);
 
       //check active survey
       $user->has_survey = Helper::checkActiveSurvey($user);

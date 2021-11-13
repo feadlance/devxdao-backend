@@ -86,4 +86,12 @@ class Proposal extends Model
   public function getDeliveredAtAttribute($value) {
     return $value ? (new Carbon($value))->format("Y-m-d") : $value;
   }
+
+  public function proposalRequestPayment() {
+    return $this->hasOne('App\Proposal', 'id', 'proposal_request_payment');
+  }
+
+  public function proposalRequestFrom() {
+    return $this->hasOne('App\Proposal', 'id', 'proposal_request_from');
+  }
 }

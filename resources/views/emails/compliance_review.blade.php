@@ -179,9 +179,9 @@
                                             <div style="color:#393d47;font-family:'Roboto', Tahoma, Verdana, Segoe, sans-serif;line-height:1.2;padding-top:50px;padding-right:20px;padding-bottom:15px;padding-left:20px;">
                                                 <div class="txtTinyMce-wrapper" style="line-height: 1.2; font-size: 12px; font-family: 'Roboto', Tahoma, Verdana, Segoe, sans-serif; color: #393d47; mso-line-height-alt: 14px;">
                                                     <div style="font-size: 14px; line-height: 1.2; word-break: break-word; font-family: Roboto, Tahoma, Verdana, Segoe, sans-serif; mso-line-height-alt: 17px; margin: 0; padding-bottom: 5px;">
-                                                        <p>Compliance admin,</p>
-                                                        <p>Please review the attached PDF for grant {{$proposal->title}}. This grant need your decision on compliance before it can move to a formal vote. Please click a button below when your are ready.</p>
-                                                        <p> additon to the attached PDF, the link to the proposal is available publically <a href="{{$public_link}}">here</a> </p>
+                                                        <p>Compliance Admin,</p>
+                                                        <p>Please review the attached PDF for grant {{$proposal->title}}. This grant needs your decision on compliance before it can move to a formal vote. Please log into the compliance portal to review, OR click one of the quick review buttons below.</p>
+                                                        <p>In addition to the attached PDF, the link to the proposal is publicly available <a href="{{$public_link}}">here</a>.</p>
                                                         <div style="text-align: center;">
                                                             <a href="{{$approve_link}}" target="_blank" style="width:50%; background-color: #04AA6D; padding: 8px 12px;border-radius: 2px;font-family: Helvetica, Arial, sans-serif;font-size: 14px; color: #0C0B0B;text-decoration: none;font-weight:bold;display: inline-block;">
                                                                 I approve this grant

@@ -755,7 +755,7 @@ class Helper
     $response = $client->sendTemplateSignatureRequest($request);
 
     // Log when request to Hellosign
-    $signatures = SignatureGrant::where('proposal_id',  $proposal->id)->all();
+    $signatures = SignatureGrant::where('proposal_id',  $proposal->id)->get();
     Helper::createHellosignLogging(
       $user->id,
       'Send Signature Request',
@@ -767,9 +767,9 @@ class Helper
     );
 
     // Void the prior request when a new request is sent
-    if ($proposal->membership_signature_request_id) {
-      $client->cancelSignatureRequest($proposal->membership_signature_request_id);
-    }
+    // if ($proposal->membership_signature_request_id) {
+    //   $client->cancelSignatureRequest($proposal->membership_signature_request_id);
+    // }
 
     $signature_request_id = $response->getId();
 
@@ -864,7 +864,7 @@ class Helper
     $response = $client->sendTemplateSignatureRequest($request);
 
     // Log when request to Hellosign
-    $signatures = SignatureGrant::where('proposal_id',  $proposal->id)->all();
+    $signatures = SignatureGrant::where('proposal_id',  $proposal->id)->get();
     Helper::createHellosignLogging(
       $user->id,
       'Send Signature Request',
@@ -876,9 +876,9 @@ class Helper
     );
 
     // Void the prior request when a new request is sent
-    if ($proposal->signature_request_id) {
-      $client->cancelSignatureRequest($proposal->signature_request_id);
-    }
+    // if ($proposal->signature_request_id) {
+    //   $client->cancelSignatureRequest($proposal->signature_request_id);
+    // }
 
     $signature_request_id = $response->getId();
 
@@ -1121,9 +1121,15 @@ class Helper
     $fullName = implode(' ', array_filter([$initialA, $initialB]));
     $fullAddress = implode(' ', array_filter([$profile->address, $profile->address2, $profile->city, $profile->zip]));
     $shuftiproData = json_decode($shuftipro->data);
-    $shuftiproFullName = $shuftipro->address_result ? $shuftiproData->name->full_name : '';
-    $shuftiproAddress = $shuftipro->address_result ? $shuftiproData->address_document->full_address : $shuftiproData->profile_address;
-    $shuftiproCountry = $shuftipro->address_result ? $shuftiproData->address_document->country : $shuftiproData->country_company;
+    $shuftiproFullName = $shuftiproAddress = $shuftiproCountry = '';
+    if (isset($shuftipro->address_result) && $shuftipro->address_result) {
+      $shuftiproFullName = $shuftiproData->name->full_name ?? '';
+      $shuftiproAddress = $shuftiproData->address_document->full_address ?? '';
+      $shuftiproCountry = $shuftiproData->address_document->country ?? '';
+    } else {
+      $shuftiproAddress = $shuftiproData->profile_address ?? '';
+      $shuftiproCountry = $shuftiproData->country_company ?? '';
+    }
 
     $request->setCustomFieldValue('Initial', $shuftiproFullName ? $shuftiproFullName : $fullName);
     $request->setCustomFieldValue('ProjectTitle', $proposal->title);
@@ -1200,7 +1206,7 @@ class Helper
     $response = $client->sendTemplateSignatureRequest($request);
 
     // Log when request to Hellosign
-    $signatures = SignatureGrant::where('proposal_id',  $proposal->id)->all();
+    $signatures = SignatureGrant::where('proposal_id',  $proposal->id)->get();
     Helper::createHellosignLogging(
       $user->id,
       'Send Signature Request',
@@ -1212,9 +1218,9 @@ class Helper
     );
 
     // Void the prior request when a new request is sent
-    if ($proposal->signature_grant_request_id) {
-      $client->cancelSignatureRequest($proposal->signature_grant_request_id);
-    }
+    // if ($proposal->signature_grant_request_id) {
+    //   $client->cancelSignatureRequest($proposal->signature_grant_request_id);
+    // }
 
     $signature_request_id = $response->getId();
 
@@ -1236,6 +1242,12 @@ class Helper
   public static function checkPendingFinalGrant($user)
   {
     $count = FinalGrant::where('user_id', $user->id)->where('status', 'active')->count();
+    return $count > 0 ? true : false;
+  }
+
+  public static function checkGrantProposal($user)
+  {
+    $count = Proposal::where('user_id', $user->id)->where('type', 'grant')->count();
     return $count > 0 ? true : false;
   }
 
@@ -1666,18 +1678,12 @@ class Helper
 		}
 	}
 
-  public static function queryGetInvoice($email, $proposalId, $startDate, $endDate, $search)
+  public static function queryGetInvoice($startDate, $endDate, $search)
   {
     $query = Invoice::join('proposal', 'proposal.id', '=', 'invoice.proposal_id')
       ->join('users', 'users.id', '=', 'invoice.payee_id')
       ->join('milestone', 'milestone.id', '=', 'invoice.milestone_id')
-      ->where(function ($query) use ($proposalId, $email, $search, $startDate, $endDate) {
-        if ($email) {
-          $query->where('users.email', '=', $email);
-        }
-        if ($proposalId) {
-          $query->where('invoice.proposal_id', '=', $proposalId);
-        }
+      ->where(function ($query) use ( $search, $startDate, $endDate) {
         if ($startDate) {
           $query->where('invoice.sent_at', '>=', $startDate);
         }

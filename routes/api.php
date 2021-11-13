@@ -126,6 +126,7 @@ Route::group(['prefix' => 'user', 'middleware' => ['auth:api']], function () {
 	Route::post('/proposal', 'UserController@submitProposal');
 	Route::post('/simple-proposal', 'UserController@submitSimpleProposal');
 	Route::post('/admin-grant-proposal', 'UserController@submitAdminGrantProposal');
+	Route::post('/advance-payment-proposal', 'UserController@submitAdvancePaymentProposal');
 	Route::post('/proposal-change', 'UserController@submitProposalChange');
 	Route::post('/proposal-change-comment', 'UserController@submitProposalChangeComment');
 	Route::post('/vote', 'UserController@submitVote');
@@ -164,6 +165,9 @@ Route::group(['prefix' => 'user', 'middleware' => ['auth:api']], function () {
 	Route::put('/proposal-change/{proposalChangeId}/withdraw', 'UserController@withdrawProposalChange');
 	Route::put('/shuftipro-temp', 'UserController@updateShuftiproTemp');
 	Route::put('/proposal/{proposalId}/payment-form', 'UserController@updatePaymentForm');
+	Route::put('/show-unvoted-informal', 'UserController@checkShowUnvotedInformal');
+	Route::put('/show-unvoted-formal', 'UserController@checkShowUnvotedFormal');
+
 
 	// GET
 	Route::get('/reputation-track', 'UserController@getReputationTrack');
@@ -181,6 +185,7 @@ Route::group(['prefix' => 'user', 'middleware' => ['auth:api']], function () {
 	Route::get('/current-survey', 'UserController@getCurentSurvey');
 	Route::get('/list-va', 'UserController@getListUserVA');
 	Route::get('/proposal/{proposalId}/milestone-not-submit', 'UserController@getMilestoneNotSubmit');
+	Route::get('/proposal/request-payment', 'UserController@getProposalRequestPayment');
 });
 
 // Admin Functions
@@ -276,6 +281,7 @@ Route::group(['prefix' => 'admin', 'middleware' => ['auth:api']], function () {
 	Route::put('/proposal/{proposalId}/deny', 'AdminController@denyProposal');
 	Route::put('/proposal/{proposalId}/approve-payment', 'AdminController@approveProposalPayment');
 	Route::put('/proposal/{proposalId}/deny-payment', 'AdminController@denyProposalPayment');
+	Route::get('/proposal/{proposalId}/file-url', 'AdminController@getProposalPdfUrl');
 	Route::put('/proposal-change/{proposalChangeId}/force-approve', 'AdminController@forceApproveProposalChange');
 	Route::put('/proposal-change/{proposalChangeId}/force-deny', 'AdminController@forceDenyProposalChange');
 	Route::put('/proposal-change/{proposalChangeId}/force-withdraw', 'AdminController@forceWithdrawProposalChange');
@@ -337,8 +343,6 @@ Route::group(['prefix' => 'ops', 'middleware' => ['auth:ops_api']], function () 
 	});
 });
 
-Route::get('test/invoice/{invoiceId}/file-url', 'ComplianceController@getInvoicePdfUrl');
-
 Route::group(['prefix' => 'compliance', 'middleware' => ['auth:compliance_api']], function () {
 	Route::post('/logout', 'ComplianceController@logout');
 	Route::get('/me', 'ComplianceController@getMe');
@@ -350,11 +354,11 @@ Route::group(['prefix' => 'compliance', 'middleware' => ['auth:compliance_api']]
 		Route::post('/users/{id}/undo-revoke', 'ComplianceController@undoRevokeUser');
 		Route::post('/users/{id}/reset-password', 'ComplianceController@resetPassword');
 		Route::post('/users/{id}/compliance-status', 'ComplianceController@updateComplianceStatus');
+		Route::post('/users/{id}/paid-status', 'ComplianceController@updatePaidStatus');
 
 		// GET
 		Route::get('/users', 'ComplianceController@getListUser');
 		Route::get('/users/{id}/ip-histories', 'ComplianceController@getIpHistories');
-		
 	});
 
 	Route::prefix('shared')->group(function () {
@@ -371,7 +375,6 @@ Route::group(['prefix' => 'compliance', 'middleware' => ['auth:compliance_api']]
 		Route::get('/vote/{id}/vote-result', 'AdminController@getVoteResult');
 		Route::get('/vote/{id}/user-not-vote', 'AdminController@getListUserNotVote');
 		Route::get('/invoice-all', 'ComplianceController@getAllInvoices');
-		Route::get('/invoice-all/export-csv', 'ComplianceController@exportCSVInvoices');
 		Route::get('/invoice/{invoiceId}/file-url', 'ComplianceController@getInvoicePdfUrl');
 		Route::get('/global-settings', 'SharedController@getGlobalSettings');
 		Route::get('/proposal/{proposalId}', 'SharedController@getSingleProposal');
@@ -386,11 +389,12 @@ Route::group(['prefix' => 'compliance', 'middleware' => ['auth:compliance_api']]
 		// PUT
 		Route::put('/change-password', 'ComplianceController@updatePassword');
 		Route::put('/invoice/{id}/paid', 'ComplianceController@updateInvoicePaid');
-
 	});
 });
 
 Route::group(['prefix' => 'compliance'], function () {
 	Route::get('/shared/milestone/export-csv', 'AdminController@exportMilestone');
 	Route::get('/shared/dos-fee/export-csv', 'AdminController@exportCSVDosFee');
+	Route::get('/shared/invoice-all/export-csv', 'ComplianceController@exportCSVInvoices');
+
 });

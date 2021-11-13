@@ -310,7 +310,34 @@ class ComplianceController extends Controller
         } else {
             return [
                 'success' => false,
-                'message' => 'No admin to un-revoke'
+                'message' => 'Not found user'
+            ];
+        }
+    }
+
+    public function updatePaidStatus(Request $request, $id)
+    {
+        // Validator
+        $validator = Validator::make($request->all(), [
+            'paid' => 'required|in:0,1',
+        ]);
+        if ($validator->fails()) {
+            return [
+                'success' => false,
+                'message' => 'paid must 0 or 1'
+            ];
+        }
+        $user = ComplianceUser::find($id);
+        if ($user) {
+            $user->paid = $request->paid;
+            $user->save();
+            return [
+                'success' => true
+            ];
+        } else {
+            return [
+                'success' => false,
+                'message' => 'Not found user'
             ];
         }
     }
@@ -485,6 +512,7 @@ class ComplianceController extends Controller
                 'message' => 'Provide all the necessary information'
             ];
         }
+        $settings = Helper::getSettings();
         $proposalId = $request->proposalId;
         $proposal = Proposal::find($proposalId);
         $onboarding  = OnBoarding::where('proposal_id', $proposalId)->first();
@@ -494,7 +522,17 @@ class ComplianceController extends Controller
                 'message' => 'Proposal does not exist'
             ];
         }
-        $settings = Helper::getSettings();
+        if (in_array($onboarding->compliance_status, ['denied', 'approved'])) {
+			return [
+				'success' => false,
+				'message' => "Can not perform this action. Proposal has been $onboarding->compliance_status",
+				'data' => [
+					'proposal' => $proposal,
+					'onboarding' => $onboarding,
+					'compliance_admin' => $settings['compliance_admin'],
+				]
+			];
+		}
         $onboarding->compliance_status = 'approved';
         $onboarding->compliance_reviewed_at = now();
         $onboarding->save();
@@ -531,6 +569,7 @@ class ComplianceController extends Controller
                 'message' => 'Provide all the necessary information'
             ];
         }
+        $settings = Helper::getSettings();
         $proposalId = $request->proposalId;
         $proposal = Proposal::find($proposalId);
         $onboarding  = OnBoarding::where('proposal_id', $proposalId)->first();
@@ -540,7 +579,17 @@ class ComplianceController extends Controller
                 'message' => 'Proposal does not exist'
             ];
         }
-        $settings = Helper::getSettings();
+        if (in_array($onboarding->compliance_status, ['denied', 'approved'])) {
+			return [
+				'success' => false,
+				'message' => "Can not perform this action. Proposal has been $onboarding->compliance_status",
+				'data' => [
+					'proposal' => $proposal,
+					'onboarding' => $onboarding,
+					'compliance_admin' => $settings['compliance_admin'],
+				]
+			];
+		}
         $onboarding->compliance_status = 'denied';
         $onboarding->compliance_reviewed_at = now();
         $onboarding->deny_reason = $request->reason;
@@ -665,8 +714,15 @@ class ComplianceController extends Controller
         $invoices = [];
 
         // Variables
+		$start_date = $request->startDate;
+		$end_date = $request->endDate;
+		$search = $request->search;
+        $show = $request->show;
+		$sort_key = $sort_direction = '';
+		$page_id = 0;
+
         $sort_key = $sort_direction = '';
-        $email = $proposalId = $search = $startDate = $endDate = '';
+        $search = $start_date = $end_date = '';
         $page_id = 0;
         $data = $request->all();
         if ($data && is_array($data)) extract($data);
@@ -679,7 +735,7 @@ class ComplianceController extends Controller
         $limit = isset($data['limit']) ? $data['limit'] : 10;
         $start = $limit * ($page_id - 1);
 
-        $query = Helper::queryGetInvoice($email, $proposalId, $startDate, $endDate, $search);
+        $query = Helper::queryGetInvoice($start_date, $end_date, $search);
         $totalGrant = $query->sum('milestone.grant');
         $invoiceCount = $query->count();
 
@@ -687,8 +743,14 @@ class ComplianceController extends Controller
         $totalPaid = $query->sum('milestone.grant');
         $InvoicePaidCount = $query->count();
 
-        $query = Helper::queryGetInvoice($email, $proposalId, $startDate, $endDate, $search);
-        $invoices = $query->select(['invoice.*'])
+        $queryInvoices = Helper::queryGetInvoice($start_date, $end_date, $search);
+        if($show == 'paid') {
+            $queryInvoices->where('invoice.paid', 1);
+        }
+        if($show == 'unpaid') {
+            $queryInvoices->where('invoice.paid', 0);
+        }
+        $invoices = $queryInvoices->select(['invoice.*'])
             ->with(['proposal', 'proposal.milestones', 'milestone'])
             ->orderBy($sort_key, $sort_direction)
             ->offset($start)
@@ -701,8 +763,8 @@ class ComplianceController extends Controller
             'totalPaid' => $totalPaid,
             'totalUnpaid' => $totalGrant - $totalPaid,
             'invoiceCount' => $invoiceCount,
-            'InvoicePaidCount' => $InvoicePaidCount,
-            'InvoiceUnpaidCount' => $invoiceCount - $InvoicePaidCount,
+            'invoicePaidCount' => $InvoicePaidCount,
+            'invoiceUnpaidCount' => $invoiceCount - $InvoicePaidCount,
             'finished' => count($invoices) < $limit ? true : false,
             'invoices' => $invoices,
         ];
@@ -710,6 +772,7 @@ class ComplianceController extends Controller
 
     public function updateInvoicePaid($id, Request $request)
     {
+        $admin = Auth::user();
         $invoice = Invoice::where('id', $id)->first();
 
         if (!$invoice) {
@@ -719,13 +782,19 @@ class ComplianceController extends Controller
             ];
         }
 
-        $invoice->paid = $request->paid;
-        $invoice->marked_paid_at = now();
-        $invoice->save();
+        if ($admin && ($admin->paid ?? 0)) {
+            $invoice->paid = $request->paid;
+            $invoice->marked_paid_at = $request->paid ? now() : null;
+            $invoice->save();
+    
+            return [
+                'success' => true,
+                'invoice' => $invoice,
+            ];
+        }
 
         return [
-            'success' => true,
-            'invoice' => $invoice,
+            'success' => false,
         ];
     }
 
@@ -733,17 +802,28 @@ class ComplianceController extends Controller
     {
         $admin = Auth::user();
         // Variables
+		$start_date = $request->startDate;
+		$end_date = $request->endDate;
+		$search = $request->search;
+        $show = $request->show;
+
         $sort_key = $sort_direction = '';
-        $email = $proposalId = $search = $startDate = $endDate = '';
+        $search = $start_date = $end_date = '';
         $data = $request->all();
         if ($data && is_array($data)) extract($data);
 
         if (!$sort_key) $sort_key = 'invoice.id';
         if (!$sort_direction) $sort_direction = 'desc';
 
-        $query = Helper::queryGetInvoice($email, $proposalId, $startDate, $endDate, $search);
-        $invoices = $query->select(['invoice.*'])
-            ->with(['proposal'])
+        $queryInvoices = Helper::queryGetInvoice($start_date, $end_date, $search);
+        if($show == 'paid') {
+            $queryInvoices->where('invoice.paid', 1);
+        }
+        if($show == 'unpaid') {
+            $queryInvoices->where('invoice.paid', 0);
+        }
+        $invoices = $queryInvoices->select(['invoice.*'])
+            ->with(['proposal', 'proposal.milestones', 'milestone'])
             ->orderBy($sort_key, $sort_direction)
             ->get();
 

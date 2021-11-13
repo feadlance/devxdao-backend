@@ -91,7 +91,7 @@ class VADailySummary extends Command
             ->select(['vote.id', 'vote.type', 'vote.content_type', 'proposal.title', 'vote.updated_at', 'vote.created_at'])->get();
         $noQuorumVotes2 = Vote::join('proposal', 'proposal.id', '=', 'vote.proposal_id')
             ->where('vote.status', 'active')
-            ->select(['vote.id', 'vote.type', 'vote.content_type', 'proposal.title', 'vote.updated_at', 'vote.created_at'])->get();
+            ->select(['vote.*', 'proposal.title'])->get();
         foreach ($noQuorumVotes2 as $vote) {
             if ($vote->content_type == 'grant') {
                 $quorumRate = (float) $settings['quorum_rate'];
@@ -107,6 +107,10 @@ class VADailySummary extends Command
                 $quorumRate = (float) $settings['quorum_rate_simple'];
                 $timeLeft = Carbon::parse($vote->created_at)->addMinute($minsSimple);
             } else if ($vote->content_type == 'admin-grant') {
+                $quorumRate = (float) $settings['quorum_rate_simple'];
+                $timeLeft = Carbon::parse($vote->created_at)->addMinute($minsSimple);
+            }
+            else if ($vote->content_type == 'advance-payment') {
                 $quorumRate = (float) $settings['quorum_rate_simple'];
                 $timeLeft = Carbon::parse($vote->created_at)->addMinute($minsSimple);
             }

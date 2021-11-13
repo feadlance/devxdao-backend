@@ -647,7 +647,7 @@ class SharedController extends Controller
 			$proposal = Proposal::find($proposalId);
 
 			// Proposal Check
-			if (!$proposal || !in_array($proposal->type, ["simple", "admin-grant"])) {
+			if (!$proposal || !in_array($proposal->type, ["simple", "admin-grant", "advance-payment"])) {
 				return [
 					'success' => false,
 					'message' => 'Invalid proposal'
@@ -746,6 +746,13 @@ class SharedController extends Controller
 				$vote->content_type = "grant";
 			else if ($proposal->type == "simple")
 				$vote->content_type = "simple";
+			else if ($proposal->type == "admin-grant")
+				$vote->content_type = "admin-grant";
+			else if ($proposal->type == "advance-payment") {
+                $vote->content_type = "advance-payment";
+                $proposal->proposal_advance_status = 'in-voting';
+                $proposal->save();
+            }
 			$vote->save();
 
 			// Emailer Admin
@@ -1534,6 +1541,8 @@ class SharedController extends Controller
 
 		$proposal = Proposal::where('id', $proposalId)
 			->with([
+				'proposalRequestPayment',
+				'proposalRequestFrom',
 				'user',
 				'user.profile',
 				'user.shuftipro',
@@ -1607,7 +1616,7 @@ class SharedController extends Controller
 			// Total Members
 			$proposal->totalMembers = Helper::getTotalMemberProposal($proposalId);
 
-			
+
 			if ($proposal->votes && count($proposal->votes)) {
 				foreach ($proposal->votes as $vote) {
 					$vote->totalVotes = VoteResult::where('proposal_id', $proposal->id)
@@ -2200,8 +2209,7 @@ class SharedController extends Controller
 					}
 					if($ignore_previous_winner == 1) {
 						$survey_rank_ids = SurveyRank::where('is_winner', 1)->pluck('proposal_id');
-						$survey_downvote_rank_ids = SurveyDownVoteRank::where('is_winner', 1)
-							->where('is_approved', 1)->pluck('proposal_id');
+						$survey_downvote_rank_ids = SurveyDownVoteRank::where('is_winner', 1)->pluck('proposal_id');
 						$query->whereNotIn('proposal.id', $survey_rank_ids->toArray())
 							->whereNotIn('proposal.id', $survey_downvote_rank_ids->toArray());
 					}
@@ -2405,7 +2413,7 @@ class SharedController extends Controller
 						'vote.*',
 						'vote_result.type as vote_result_type',
 						'vote_result.value as vote_result_value',
-						DB::raw('(CASE WHEN vote.content_type = \'grant\' OR proposal.type = \'admin-grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros')
+						DB::raw('(CASE WHEN vote.content_type = \'grant\' OR proposal.type = \'admin-grant\' OR proposal.type = \'advance-payment\'  THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros')
 					])
 					->orderBy($sort_key, $sort_direction)
 					->groupBy('vote.id')
@@ -2434,7 +2442,7 @@ class SharedController extends Controller
 						'users.last_name',
 						'users.id as user_id',
 						'vote.*',
-						DB::raw('(CASE WHEN vote.content_type = \'grant\' OR proposal.type = \'admin-grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros')
+						DB::raw('(CASE WHEN vote.content_type = \'grant\' OR proposal.type = \'admin-grant\' OR proposal.type = \'advance-payment\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros')
 					])
 					->orderBy($sort_key, $sort_direction)
 					->offset($start)
@@ -2491,6 +2499,8 @@ class SharedController extends Controller
 
 		$limit = isset($data['limit']) ? $data['limit'] : 10;
 		$start = $limit * ($page_id - 1);
+		$show_unvoted = $request->show_unvoted;
+		$total_unvoted = 0;
 
 		// Records
 		if ($user) {
@@ -2509,11 +2519,25 @@ class SharedController extends Controller
 					})
 					->where('vote.type', 'formal')
 					->where('vote.status', 'active')
-					->where(function ($query) use ($search) {
+					->where(function ($query) use ($search, $show_unvoted, $user) {
 						if ($search) {
 							$query->where('proposal.title', 'like', '%' . $search . '%')
 								->orWhere('proposal.member_reason', 'like', '%' . $search . '%')
 								->orWhere('proposal.id', 'like', '%' . $search . '%');
+						}
+						if($show_unvoted) {
+							$query->where('users.id', '!=', $user->id)
+								->whereNotExists(function($query) use($user) {
+								$query->selectRaw('vote_result2.user_id')
+									->from('vote')
+									->join('vote as vote2', function ($join) {
+										$join->on('vote.proposal_id', '=', 'vote2.proposal_id');
+										$join->where('vote2.type', 'informal');
+										$join->on('vote2.content_type', 'vote.content_type');
+									})
+									->join('vote_result as vote_result2', 'vote_result2.vote_id', 'vote2.id')
+									->where('vote_result.user_id', $user->id);
+							});
 						}
 					})
 					->select([
@@ -2528,11 +2552,12 @@ class SharedController extends Controller
 						'vote_result.type as vote_result_type',
 						'vote_result.value as vote_result_value',
 						'vote2.result_count as total_member',
-						DB::raw('(CASE WHEN vote.content_type = \'grant\' OR proposal.type = \'admin-grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
-						DB::raw("(CASE WHEN vote.content_type = 'grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsFormal MINUTE, current_timestamp())  
+						DB::raw('(CASE WHEN vote.content_type = \'grant\' OR proposal.type = \'admin-grant\' OR proposal.type = \'advance-payment\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
+						DB::raw("(CASE WHEN vote.content_type = 'grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsFormal MINUTE, current_timestamp())
 							WHEN vote.content_type = 'milestone' THEN TIMEDIFF(vote.created_at + INTERVAL $minsMileStone MINUTE, current_timestamp())
 							WHEN vote.content_type = 'simple' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
 							WHEN vote.content_type = 'admin-grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
+							WHEN vote.content_type = 'advance-payment' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
 							ELSE null END ) AS timeLeft")
 
 					]);
@@ -2545,6 +2570,40 @@ class SharedController extends Controller
 					->offset($start)
 					->limit($limit)
 					->get();
+
+				$total_unvoted =  Vote::join('proposal', 'proposal.id', '=', 'vote.proposal_id')
+				->join('users', 'users.id', '=', 'proposal.user_id')
+				->leftJoin('vote_result', function ($join) use ($user) {
+					$join->on('vote_result.vote_id', '=', 'vote.id');
+					$join->where('vote_result.user_id', $user->id);
+				})
+				->leftJoin('milestone', 'vote.milestone_id', '=', 'milestone.id')
+				->join('vote as vote2', function ($join) {
+					$join->on('vote.proposal_id', '=', 'vote2.proposal_id');
+					$join->where('vote2.type', 'informal');
+					$join->on('vote2.content_type', 'vote.content_type');
+				})
+				->where('vote.type', 'formal')
+				->where('vote.status', 'active')
+				->where('users.id', '!=', $user->id)
+				->whereNotExists(function($query) use($user) {
+					$query->selectRaw('vote_result2.user_id')
+						->from('vote')
+						->join('vote as vote2', function ($join) {
+							$join->on('vote.proposal_id', '=', 'vote2.proposal_id');
+							$join->where('vote2.type', 'informal');
+							$join->on('vote2.content_type', 'vote.content_type');
+						})
+						->join('vote_result as vote_result2', 'vote_result2.vote_id', 'vote2.id')
+						->where('vote_result.user_id', $user->id);
+				})
+				->where(function ($query) use ($search, $show_unvoted, $user) {
+					if ($search) {
+						$query->where('proposal.title', 'like', '%' . $search . '%')
+							->orWhere('proposal.member_reason', 'like', '%' . $search . '%')
+							->orWhere('proposal.id', 'like', '%' . $search . '%');
+					}
+				})->count();
 			} else {
 				$votes = Vote::join('proposal', 'proposal.id', '=', 'vote.proposal_id')
 					->join('users', 'users.id', '=', 'proposal.user_id')
@@ -2573,11 +2632,12 @@ class SharedController extends Controller
 						'users.id as user_id',
 						'vote.*',
 						// 'vote2.result_count as total_member',
-						DB::raw('(CASE WHEN vote.content_type = \'grant\' OR proposal.type = \'admin-grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
-						DB::raw("(CASE WHEN vote.content_type = 'grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsFormal MINUTE, current_timestamp())  
+						DB::raw('(CASE WHEN vote.content_type = \'grant\' OR proposal.type = \'admin-grant\' OR proposal.type = \'advance-payment\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
+						DB::raw("(CASE WHEN vote.content_type = 'grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsFormal MINUTE, current_timestamp())
 							WHEN vote.content_type = 'milestone' THEN TIMEDIFF(vote.created_at + INTERVAL $minsMileStone MINUTE, current_timestamp())
 							WHEN vote.content_type = 'simple' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
 							WHEN vote.content_type = 'admin-grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
+							WHEN vote.content_type = 'advance-payment' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
 							ELSE null END ) AS timeLeft")
 
 					])
@@ -2614,6 +2674,7 @@ class SharedController extends Controller
 		return [
 			'success' => true,
 			'votes' => $votes,
+			'total_unvoted' => $total_unvoted,
 			'finished' => count($votes) < $limit ? true : false
 		];
 	}
@@ -2658,7 +2719,8 @@ class SharedController extends Controller
 
 		$limit = isset($data['limit']) ? $data['limit'] : 10;
 		$start = $limit * ($page_id - 1);
-
+		$show_unvoted = $request->show_unvoted;
+		$total_unvoted = 0;
 		// Records
 		if ($user) {
 			if ($user->hasRole('member')) {
@@ -2671,11 +2733,14 @@ class SharedController extends Controller
 					->leftJoin('milestone', 'vote.milestone_id', '=', 'milestone.id')
 					->where('vote.type', 'informal')
 					->where('vote.status', 'active')
-					->where(function ($query) use ($search) {
+					->where(function ($query) use ($search, $show_unvoted, $user) {
 						if ($search) {
 							$query->where('proposal.title', 'like', '%' . $search . '%')
 								->orWhere('proposal.member_reason', 'like', '%' . $search . '%')
 								->orWhere('proposal.id', 'like', '%' . $search . '%');
+						}
+						if($show_unvoted) {
+							$query->where('vote_result.type', null)->where('users.id', '!=', $user->id);
 						}
 					})
 					->select([
@@ -2691,7 +2756,7 @@ class SharedController extends Controller
 						'vote_result.type as vote_result_type',
 						'vote_result.value as vote_result_value',
 						DB::raw('(CASE WHEN vote.content_type = \'grant\' OR proposal.type = \'admin-grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
-						DB::raw("(CASE WHEN vote.content_type = 'grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsInformal MINUTE, current_timestamp())  
+						DB::raw("(CASE WHEN vote.content_type = 'grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsInformal MINUTE, current_timestamp())
 							WHEN vote.content_type = 'milestone' THEN TIMEDIFF(vote.created_at + INTERVAL $minsMileStone MINUTE, current_timestamp())
 							WHEN vote.content_type = 'simple' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
 							WHEN vote.content_type = 'admin-grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
@@ -2706,6 +2771,24 @@ class SharedController extends Controller
 					->offset($start)
 					->limit($limit)
 					->get();
+					$total_unvoted =  Vote::join('proposal', 'proposal.id', '=', 'vote.proposal_id')
+						->join('users', 'users.id', '=', 'proposal.user_id')
+						->leftJoin('vote_result', function ($join) use ($user) {
+							$join->on('vote_result.vote_id', '=', 'vote.id');
+							$join->where('vote_result.user_id', $user->id);
+						})
+						->leftJoin('milestone', 'vote.milestone_id', '=', 'milestone.id')
+						->where('vote.type', 'informal')
+						->where('vote.status', 'active')
+						->where('vote_result.type', null)
+						->where('users.id', '!=', $user->id)
+						->where(function ($query) use ($search) {
+							if ($search) {
+								$query->where('proposal.title', 'like', '%' . $search . '%')
+									->orWhere('proposal.member_reason', 'like', '%' . $search . '%')
+									->orWhere('proposal.id', 'like', '%' . $search . '%');
+							}
+						})->count();
 			} else {
 				$votes = Vote::join('proposal', 'proposal.id', '=', 'vote.proposal_id')
 					->join('users', 'users.id', '=', 'proposal.user_id')
@@ -2730,7 +2813,7 @@ class SharedController extends Controller
 						'users.id as user_id',
 						'vote.*',
 						DB::raw('(CASE WHEN vote.content_type = \'grant\' OR proposal.type = \'admin-grant\' THEN proposal.total_grant WHEN vote.content_type = \'milestone\' THEN milestone.grant ELSE null END) AS euros'),
-						DB::raw("(CASE WHEN vote.content_type = 'grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsInformal MINUTE, current_timestamp())  
+						DB::raw("(CASE WHEN vote.content_type = 'grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsInformal MINUTE, current_timestamp())
 							WHEN vote.content_type = 'milestone' THEN TIMEDIFF(vote.created_at + INTERVAL $minsMileStone MINUTE, current_timestamp())
 							WHEN vote.content_type = 'simple' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
 							WHEN vote.content_type = 'admin-grant' THEN TIMEDIFF(vote.created_at + INTERVAL $minsSimple MINUTE, current_timestamp())
@@ -2746,6 +2829,7 @@ class SharedController extends Controller
 		return [
 			'success' => true,
 			'votes' => $votes,
+			'total_unvoted' => $total_unvoted,
 			'finished' => count($votes) < $limit ? true : false
 		];
 	}
@@ -2860,7 +2944,7 @@ class SharedController extends Controller
 			return ['success' => false];
 		}
 	}
-	
+
 	public function getTrackingProposal($proposalId)
 	{
 		$trackings = GrantTracking::where('proposal_id', $proposalId)->get();

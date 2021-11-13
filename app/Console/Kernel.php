@@ -16,6 +16,7 @@ class Kernel extends ConsoleKernel
         'App\Console\Commands\CheckVote',
         'App\Console\Commands\CheckSimpleVote',
         'App\Console\Commands\CheckAdminGrantVote',
+        'App\Console\Commands\CheckAdvancePaymentVote',
         'App\Console\Commands\CheckMilestoneVote',
         'App\Console\Commands\CheckProposal',
         'App\Console\Commands\CryptoPrice',
@@ -43,6 +44,10 @@ class Kernel extends ConsoleKernel
             ->runInBackground();
             // ->withoutOverlapping();
         $schedule->command('admingrantvote:check')
+            ->everyMinute()
+            ->runInBackground();
+            // ->withoutOverlapping();
+        $schedule->command('advance-payment-vote:check')
             ->everyMinute()
             ->runInBackground();
             // ->withoutOverlapping();
