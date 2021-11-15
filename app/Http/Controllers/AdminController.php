@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\App;
+use PDF;
 
 use App\User;
 use App\PreRegister;
@@ -595,6 +596,13 @@ class AdminController extends Controller
 				}
 			}
 		}
+
+		$onboardings->each(function ($onboarding, $key) {
+			$onboarding->user->makeVisible([
+				"shuftipro",
+				"shuftiproTemp",
+			]);
+		});
 
 		return [
 			'success' => true,
@@ -1203,7 +1211,7 @@ class AdminController extends Controller
 
 				$emailerData = Helper::getEmailerData();
 				Helper::triggerUserEmail($user, 'Grant Live', $emailerData);
-
+				Helper::createGrantTracking($finalGrant->proposal_id, 'Grant activated by ETA', 'grant_activated');
 				return ['success' => true];
 			}
 		}
@@ -1248,6 +1256,7 @@ class AdminController extends Controller
 
 			$emailerData = Helper::getEmailerData();
 			Helper::triggerUserEmail($user, 'Grant Live', $emailerData);
+			Helper::createGrantTracking($finalGrant->proposal_id, 'Grant activated by ETA', 'grant_activated');
 
 			return ['success' => true];
 		}
@@ -1480,6 +1489,10 @@ class AdminController extends Controller
 				->get();
 		}
 
+		$proposals->each(function ($proposal, $key) {
+			$proposal->makeHidden([ 'onboarding' ]);
+		});
+
 		return [
 			'success' => true,
 			'proposals' => $proposals
@@ -1638,9 +1651,19 @@ class AdminController extends Controller
 				}
 				$user->total_informal_votes = $total_informal_votes;
 				$user->total_voted = $total_voted;
+
+				$user->makeVisible([
+					"profile",
+					"shuftipro",
+					"shuftiproTemp",
+				]);
+				if ($user->profile ?? false) {
+					$user->profile->makeVisible([ 'rep', 'rep_pending', ]);
+				}
+
 				return [
 					'success' => true,
-					'user' => $user
+					'user' => $user,
 				];
 			}
 		}
@@ -4529,20 +4552,60 @@ class AdminController extends Controller
     {
 		$admin = Auth::user();
 		if ($admin && $admin->hasRole('admin')) {
-			$proposal = Proposal::with(['milestones'])->where('id', $proposalId)->first();
+			$proposal = Proposal::where('id', $proposalId)
+				->with([
+					'user',
+					'user.profile',
+					'user.shuftipro',
+					'grants',
+					'milestones',
+					'citations',
+					'citations.repProposal',
+					'citations.repProposal.user',
+					'citations.repProposal.user.profile',
+					'members',
+					'files',
+					'votes',
+					'onboarding',
+					'surveyRanks.survey',
+					'surveyDownVoteRanks.survey',
+				])
+				->with(['surveyRanks' => function ($q) {
+					$q->orderBy('rank', 'desc');
+				}])
+				->with(['surveyDownVoteRanks' => function ($q) {
+					$q->orderBy('rank', 'desc');
+				}])
+				->has('user')
+				->has('user.profile')
+				->first();
+
 			if (!$proposal) {
 				return [
 					'success' => false,
-					'message' => 'Proposal not found'
+					'message' => 'Invalid proposal'
 				];
 			}
-	
-			$pdf = App::make('dompdf.wrapper');
-        	$pdf->loadView('pdf.proposal', compact('proposal'));
-			$fullpath = 'pdf/proposal/proposal_detail_' . $proposal->id . '.pdf';
+
+			// Sponsor
+			$proposal->sponsor = Helper::getSponsor($proposal);
+
+			// Loser
+			$proposal->loser = $proposal->surveyDownVoteRanks->first(function ($value, $key) {
+				return $value->is_winner && $value->is_approved;
+			});
+			// Winner
+			$proposal->winner = $proposal->surveyRanks->first(function ($value, $key) {
+				return $value->is_winner;
+			});
+
+			$pdf = PDF::loadView('proposal_pdf', compact('proposal'));
+			$fullpath = 'pdf/proposal/proposal_' . $proposal->id . '.pdf';
 			Storage::disk('local')->put($fullpath, $pdf->output());
 			$url = Storage::disk('local')->url($fullpath);
-	
+			$proposal->pdf = $url;
+			Proposal::where('id', $proposal->id)->update(['pdf' => $url]);
+
 			return [
 				'success' => true,
 				'pdf_link_url' => $url

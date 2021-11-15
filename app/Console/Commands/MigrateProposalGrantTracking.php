@@ -82,7 +82,7 @@ class MigrateProposalGrantTracking extends Command
                             $this->saveGrantTracking($proposal->id, "Passed Formal vote", 'passed_formal_vote', $formal_vote->updated_at);
                         }
                     }
-                    $finalGrant = FinalGrant::where('proposal_id', $proposal->id)->first();
+                    $finalGrant = FinalGrant::where('proposal_id', $proposal->id)->whereIn('status', ['active', 'completed'])->first();
                     if ($finalGrant) {
                         $this->saveGrantTracking($proposal->id, 'Grant activated by ETA', 'grant_activated', $finalGrant->created_at);
                     }

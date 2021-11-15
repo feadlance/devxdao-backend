@@ -2,43 +2,31 @@
 
 namespace App\Exports;
 
-use Maatwebsite\Excel\Concerns\FromCollection;
-use Maatwebsite\Excel\Concerns\WithHeadings;
-use Maatwebsite\Excel\Concerns\WithMapping;
+use App\User;
+use Illuminate\Contracts\View\View;
+use Maatwebsite\Excel\Concerns\FromView;
+use Maatwebsite\Excel\Concerns\RegistersEventListeners;
+use Maatwebsite\Excel\Concerns\WithEvents;
+use Maatwebsite\Excel\Events\AfterSheet;
 
-
-class VoteResultExport implements FromCollection, WithHeadings, WithMapping
+class VoteResultExport implements FromView, WithEvents
 {
+    use RegistersEventListeners;
+    protected $query ;
+
     public function __construct($query)
     {
         $this->query = $query;
     }
-
-    /**
-     * @return \Illuminate\Support\Collection
-     */
-    public function collection()
+    public function view(): View
     {
-        $voteResults = $this->query;
-        return $voteResults;
+        return view('excel.vote_detail', [
+            'proposal' => $this->query
+        ]);
     }
-
-    public function map($voteResults): array
+    public static function afterSheet(AfterSheet $event)
     {
-        return [
-            $voteResults->forum_name,
-            $voteResults->type == 'for' ? $voteResults->value : '',
-            $voteResults->type == 'against' ? $voteResults->value : '',
-            $voteResults->created_at->format('m-d-Y  H:i A')
-        ];
+        $event->sheet->getDelegate()->mergeCells('A7:F7');
     }
-    public function headings(): array
-    {
-        return [
-            'Forum Name',
-            'Stake For',
-            'Stake Against',
-            'Time of Vote',
-        ];
-    }
+    
 }

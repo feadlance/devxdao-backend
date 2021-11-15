@@ -632,6 +632,10 @@ class UserController extends Controller
 		$user = Auth::user();
 
     if ($user) {
+    	if($user->is_admin !== 1) {
+    		return ['success' => false];
+    	}
+
       $userId = (int) $user->id;
 
       $record = Shuftipro::where('user_id', $userId)->first();

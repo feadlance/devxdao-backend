@@ -28,7 +28,14 @@ class User extends Authenticatable
      * @var array
      */
     protected $hidden = [
-        'password', 'remember_token',
+        'password',
+        'remember_token',
+        'twoFA_login_code',
+        'profile',
+        'shuftipro',
+        'shuftiproTemp',
+        'accessToken',
+        'confirmation_code',
     ];
 
     /**

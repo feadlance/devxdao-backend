@@ -9,6 +9,15 @@ class Proposal extends Model
 {
 	protected $table = 'proposal';
 
+  /**
+   * The attributes that should be hidden for arrays.
+   *
+   * @var array
+   */
+  protected $hidden = [
+    'bank', 'crypto', 'user',
+  ];
+
 	public function user() {
 		return $this->hasOne('App\User', 'id', 'user_id');
 	}

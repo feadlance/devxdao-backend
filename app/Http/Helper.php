@@ -175,7 +175,6 @@ class Helper
       $finalGrant->milestones_complete = 0;
       $finalGrant->milestones_total = count($proposal->milestones);
       $finalGrant->save();
-      Helper::createGrantTracking($proposal->id, 'Grant activated by ETA', 'grant_activated');
     }
     return $finalGrant;
   }
@@ -1151,11 +1150,10 @@ class Helper
     );
 
     // OP Signer
-    $signature = SignatureGrant::where('role', 'OP')
-      ->where('email', $user->email)
+    SignatureGrant::where('role', 'OP')
       ->where('proposal_id',  $proposal->id)
-      ->first();
-    if (!$signature) $signature = new SignatureGrant;
+      ->delete();
+    $signature = new SignatureGrant;
     $signature->proposal_id = $proposal->id;
     $signature->name = $user->first_name . ' ' . $user->last_name;
     $signature->email = $user->email;
@@ -1170,11 +1168,10 @@ class Helper
         'CFO'
       );
       // CFO Signer
-      $signature = SignatureGrant::where('role', 'CFO')
-        ->where('email', $settings['cfo_email'])
+      SignatureGrant::where('role', 'CFO')
         ->where('proposal_id',  $proposal->id)
-        ->first();
-      if (!$signature) $signature = new SignatureGrant;
+        ->delete();
+      $signature = new SignatureGrant;
       $signature->proposal_id = $proposal->id;
       $signature->name = 'CFO';
       $signature->email = $settings['cfo_email'];
@@ -1190,11 +1187,10 @@ class Helper
         'BM'
       );
       // board_member email Signer
-      $signature = SignatureGrant::where('role', 'BM')
-        ->where('email', $settings['board_member_email'])
+      SignatureGrant::where('role', 'BM')
         ->where('proposal_id',  $proposal->id)
-        ->first();
-      if (!$signature) $signature = new SignatureGrant;
+        ->delete();
+      $signature = new SignatureGrant;
       $signature->proposal_id = $proposal->id;
       $signature->name = 'BM';
       $signature->email = $settings['board_member_email'];

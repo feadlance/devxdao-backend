@@ -52,6 +52,7 @@ use App\Survey;
 use App\SurveyDownVoteRank;
 use App\SurveyRank;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\DB;
 use Maatwebsite\Excel\Facades\Excel;
 use PDF;
@@ -251,6 +252,7 @@ class SharedController extends Controller
 								'role' => 'system',
 								'type' => 'completed',
 							]);
+     						Helper::createGrantTracking($proposalGrant->id, 'Grant activated by ETA', 'grant_activated');
 						}
 					}
 				}
@@ -1089,19 +1091,19 @@ class SharedController extends Controller
 			$grants = $request->get('grants');
 			$milestones = $request->get('milestones');
 			$citations = $request->get('citations');
-			$bank_name = $request->get('bank_name');
-			$iban_number = $request->get('iban_number');
-			$swift_number = $request->get('swift_number');
-			$holder_name = $request->get('holder_name');
-			$account_number = $request->get('account_number');
-			$bank_address = $request->get('bank_address');
-			$bank_city = $request->get('bank_city');
-			$bank_country = $request->get('bank_country');
-			$bank_zip = $request->get('bank_zip');
-			$holder_address = $request->get('holder_address');
-			$holder_city = $request->get('holder_city');
-			$holder_country = $request->get('holder_country');
-			$holder_zip = $request->get('holder_zip');
+			// $bank_name = $request->get('bank_name');
+			// $iban_number = $request->get('iban_number');
+			// $swift_number = $request->get('swift_number');
+			// $holder_name = $request->get('holder_name');
+			// $account_number = $request->get('account_number');
+			// $bank_address = $request->get('bank_address');
+			// $bank_city = $request->get('bank_city');
+			// $bank_country = $request->get('bank_country');
+			// $bank_zip = $request->get('bank_zip');
+			// $holder_address = $request->get('holder_address');
+			// $holder_city = $request->get('holder_city');
+			// $holder_country = $request->get('holder_country');
+			// $holder_zip = $request->get('holder_zip');
 
 			$crypto_type = $request->get('crypto_type');
 			$crypto_address = $request->get('crypto_address');
@@ -1286,36 +1288,36 @@ class SharedController extends Controller
 			}
 
 			// Updating Bank
-			Bank::where('proposal_id', $proposalId)->delete();
-			$bank = new Bank;
-			$bank->proposal_id = (int) $proposal->id;
-			if ($bank_name)
-				$bank->bank_name = $bank_name;
-			if ($iban_number)
-				$bank->iban_number = $iban_number;
-			if ($swift_number)
-				$bank->swift_number = $swift_number;
-			if ($holder_name)
-				$bank->holder_name = $holder_name;
-			if ($account_number)
-				$bank->account_number = $account_number;
-			if ($bank_address)
-				$bank->bank_address = $bank_address;
-			if ($bank_city)
-				$bank->bank_city = $bank_city;
-			if ($bank_zip)
-				$bank->bank_zip = $bank_zip;
-			if ($bank_country)
-				$bank->bank_country = $bank_country;
-			if ($holder_address)
-				$bank->address = $holder_address;
-			if ($holder_city)
-				$bank->city = $holder_city;
-			if ($holder_zip)
-				$bank->zip = $holder_zip;
-			if ($holder_country)
-				$bank->country = $holder_country;
-			$bank->save();
+			// Bank::where('proposal_id', $proposalId)->delete();
+			// $bank = new Bank;
+			// $bank->proposal_id = (int) $proposal->id;
+			// if ($bank_name)
+			// 	$bank->bank_name = $bank_name;
+			// if ($iban_number)
+			// 	$bank->iban_number = $iban_number;
+			// if ($swift_number)
+			// 	$bank->swift_number = $swift_number;
+			// if ($holder_name)
+			// 	$bank->holder_name = $holder_name;
+			// if ($account_number)
+			// 	$bank->account_number = $account_number;
+			// if ($bank_address)
+			// 	$bank->bank_address = $bank_address;
+			// if ($bank_city)
+			// 	$bank->bank_city = $bank_city;
+			// if ($bank_zip)
+			// 	$bank->bank_zip = $bank_zip;
+			// if ($bank_country)
+			// 	$bank->bank_country = $bank_country;
+			// if ($holder_address)
+			// 	$bank->address = $holder_address;
+			// if ($holder_city)
+			// 	$bank->city = $holder_city;
+			// if ($holder_zip)
+			// 	$bank->zip = $holder_zip;
+			// if ($holder_country)
+			// 	$bank->country = $holder_country;
+			// $bank->save();
 
 			// Updating Crypto
 			Crypto::where('proposal_id', $proposalId)->delete();
@@ -1643,9 +1645,12 @@ class SharedController extends Controller
 				return $value->is_winner;
 			});
 
+			$proposal->makeVisible('user');
+			$proposal->user->makeVisible('profile');
+
 			return [
 				'success' => true,
-				'proposal' => $proposal
+				'proposal' => $proposal,
 			];
 		}
 
@@ -1752,6 +1757,7 @@ class SharedController extends Controller
 
 		$limit = isset($data['limit']) ? $data['limit'] : 10;
 		$start = $limit * ($page_id - 1);
+		$hide_completed = $request->hide_completed;
 
 		if ($user->hasRole('admin')) {
 			$proposals = FinalGrant::with(['proposal', 'proposal.user', 'proposal.milestones', 'proposal.milestones.votes', 'proposal.milestones.milestoneReview', 'user', 'signtureGrants', 'grantLogs']);
@@ -1792,8 +1798,13 @@ class SharedController extends Controller
 			->has('proposal.milestones')
 			->has('proposal.votes')
 			->has('user')
-			->whereHas('proposal', function ($query) use ($search) {
-				$query->where('proposal.title', 'like', '%' . $search . '%');
+			->whereHas('proposal', function ($query) use ($search , $hide_completed) {
+				if($search) {
+					$query->where('proposal.title', 'like', '%' . $search . '%');
+				}
+				if($hide_completed) {
+					$query->where('final_grant.status', '!=', 'completed');
+				}
 			})
 				->where('user_id', $user->id)
 				->orderBy($sort_key, $sort_direction)
@@ -1886,6 +1897,10 @@ class SharedController extends Controller
 				->get();
 		}
 
+		$proposals->each(function ($proposal, $key) {
+			$proposal->makeHidden([ 'onboarding' ]);
+		});
+
 		return [
 			'success' => true,
 			'proposals' => $proposals,
@@ -1934,6 +1949,10 @@ class SharedController extends Controller
 			->offset($start)
 			->limit($limit)
 			->get();
+
+		$proposals->each(function ($proposal, $key) {
+			$proposal->makeHidden([ 'onboarding' ]);
+		});
 
 		return [
 			'success' => true,
@@ -2032,6 +2051,10 @@ class SharedController extends Controller
 			$proposal->euros = $proposal->total_grant;
 		}
 
+		$proposals->each(function ($proposal, $key) {
+			$proposal->makeHidden([ 'onboarding' ]);
+		});
+
 		return [
 			'success' => true,
 			'proposals' => $proposals,
@@ -2104,6 +2127,10 @@ class SharedController extends Controller
 				->limit($limit)
 				->get();
 		}
+
+		$proposals->each(function ($proposal, $key) {
+			$proposal->makeHidden([ 'onboarding' ]);
+		});
 
 		return [
 			'success' => true,
@@ -2603,7 +2630,7 @@ class SharedController extends Controller
 							->orWhere('proposal.member_reason', 'like', '%' . $search . '%')
 							->orWhere('proposal.id', 'like', '%' . $search . '%');
 					}
-				})->count();
+				})->distinct()->count('vote.id');
 			} else {
 				$votes = Vote::join('proposal', 'proposal.id', '=', 'vote.proposal_id')
 					->join('users', 'users.id', '=', 'proposal.user_id')
@@ -2858,6 +2885,9 @@ class SharedController extends Controller
 			->has('user.profile')
 			->first();
 
+		$proposal->makeVisible('user');
+		$proposal->user->makeVisible(['profile']);
+
 		return [
 			'success' => true,
 			'proposal' => $proposal
@@ -2953,23 +2983,115 @@ class SharedController extends Controller
 			'trackings' => $trackings
 		];
 	}
-
-	public function exportCSVProposal($proposalId, $voteId, Request $request)
+	
+	public function getInfoVoteProposal($proposalId, $voteId)
 	{
-		$voteResults = collect();
-		$result = $this->getSingleProposal($proposalId, $request);
+		$settings = Helper::getSettings();
+		$minsInformal = $minsSimple = $minsMileStone = $minsFormal = 0;
 
-		if ($result['success']) {
-			$proposal = $result['proposal'];
-			$vote = $proposal->votes->first(function ($value, $key) use ($voteId) {
-				return $value->id == $voteId;
-			});
+		if ($settings['time_unit_formal'] == 'min')
+		$minsFormal = (int) $settings['time_formal'];
+		else if ($settings['time_unit_formal'] == 'hour')
+		$minsFormal = (int) $settings['time_formal'] * 60;
+		else if ($settings['time_unit_formal'] == 'day')
+		$minsFormal = (int) $settings['time_formal'] * 60 * 24;
 
-			if ($vote) {
-				$voteResults = $vote->results;
+		if ($settings['time_unit_informal'] == 'min')
+		$minsInformal = (int) $settings['time_informal'];
+		else if ($settings['time_unit_informal'] == 'hour')
+		$minsInformal = (int) $settings['time_informal'] * 60;
+		else if ($settings['time_unit_informal'] == 'day')
+		$minsInformal = (int) $settings['time_informal'] * 60 * 24;
+
+		if ($settings['time_unit_simple'] == 'min')
+		$minsSimple = (int) $settings['time_simple'];
+		else if ($settings['time_unit_simple'] == 'hour')
+		$minsSimple = (int) $settings['time_simple'] * 60;
+		else if ($settings['time_unit_simple'] == 'day')
+		$minsSimple = (int) $settings['time_simple'] * 60 * 24;
+
+		if ($settings['time_unit_milestone'] == 'min')
+		$minsMileStone = (int) $settings['time_milestone'];
+		else if ($settings['time_unit_milestone'] == 'hour')
+		$minsMileStone = (int) $settings['time_milestone'] * 60;
+		else if ($settings['time_unit_milestone'] == 'day')
+		$minsMileStone = (int) $settings['time_milestone'] * 60 * 24;
+		$proposal = Proposal::find($proposalId);
+		if (!$proposal) {
+			return [
+				'success' => false,
+				'trackings' => 'Proposal Not found'
+			];
+		}
+		$vote = Vote::find($voteId);
+		if (!$vote) {
+			return [
+				'success' => false,
+				'trackings' => 'Vote Not found'
+			];
+		}
+		$timeLeft = Carbon::parse($vote->created_at);
+		if ($vote->content_type == 'grant') {
+			if ($vote->type == 'informal') {
+				$timeLeft = Carbon::parse($vote->created_at)->addMinute($minsInformal);
+			} else {
+				$timeLeft = Carbon::parse($vote->created_at)->addMinute($minsFormal);
+			}
+		} else if ($vote->content_type == 'milestone') {
+			$timeLeft = Carbon::parse($vote->created_at)->addMinute($minsMileStone);
+		} else if ($vote->content_type == 'simple') {
+			$timeLeft = Carbon::parse($vote->created_at)->addMinute($minsSimple);
+		} else if ($vote->content_type == 'admin-grant') {
+			$timeLeft = Carbon::parse($vote->created_at)->addMinute($minsSimple);
+		} else if ($vote->content_type == 'advance-payment') {
+			$timeLeft = Carbon::parse($vote->created_at)->addMinute($minsSimple);
+		}
+		$vote->timeLeft = $timeLeft;
+		$proposal->vote = $vote;
+		$milestone = null;
+		if ($vote->milestone_id) {
+			$milestone = Milestone::find($vote->milestone_id);
+			if ($milestone) {
+				$milestonePosition = Helper::getPositionMilestone($milestone);
+				$totalMilesones = Milestone::where('proposal_id', $proposalId)->count();
+				$milestone->milestonePosition = "$totalMilesones / $milestonePosition";
 			}
 		}
+		$proposal->milestone = $milestone;
+		$proposal->voteResults  = VoteResult::join('profile', 'profile.user_id', '=', 'vote_result.user_id')
+		->where('vote_id',  $voteId)
+		->where('proposal_id', $proposal->id)
+		->select([
+			'vote_result.*',
+			'profile.forum_name'
+		])
+			->orderBy('vote_result.created_at', 'asc')
+			->get();
+		$summary_preview = '';
+		if($proposal->type == 'simple') {
+			$summary_preview = $proposal->short_description;
+		} else if($proposal->type == 'grant') {
+			$summary_preview = $proposal->short_description;
+		} else if($proposal->type == 'admin-grant') {
+			$summary_preview = $proposal->things_delivered;
+		} else if($proposal->type == 'advance-payment') {
+			$summary_preview =  $proposal->amount_advance_detail;
+		}
+		$proposal->summary_preview = $summary_preview;
+		return $proposal;
+	}
 
-		return Excel::download(new VoteResultExport($voteResults), "proposal_" . $proposalId . "_vote_results_.csv");
+	public function exportCSVProposal($proposalId, $voteId)
+	{
+		$proposal = $this->getInfoVoteProposal($proposalId, $voteId);
+		return Excel::download(new VoteResultExport($proposal), "proposal_" . $proposalId . "_vote_results_.csv");
+	}
+
+	public function generateVoteProposalDetail($proposalId, $voteId)
+	{
+		$proposal = $this->getInfoVoteProposal($proposalId, $voteId);
+		$pdf = App::make('dompdf.wrapper');
+        $pdfFile = $pdf->loadView('pdf.vote_detail', compact('proposal'));
+		return $pdf->download("vote_results_$voteId.pdf");
 	}
 }

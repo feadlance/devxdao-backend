@@ -290,8 +290,18 @@ class APIController extends Controller
       
       // Membership Proposal
       $user->membership = Helper::getMembershipProposal($user);
-       //check active survey
-       $user->has_survey = Helper::checkActiveSurvey($user);
+      //check active survey
+      $user->has_survey = Helper::checkActiveSurvey($user);
+
+      $user->makeVisible([
+        "profile",
+        "accessTokenAPI",
+        "shuftipro",
+        "shuftiproTemp",
+      ]);
+      if ($user->profile ?? false) {
+        $user->profile->makeVisible([ 'rep', 'rep_pending', ]);
+      }
 
       return [
         'success' => true,
@@ -619,6 +629,16 @@ class APIController extends Controller
 
       //check active survey
       $user->has_survey = Helper::checkActiveSurvey($user);
+
+      $user->makeVisible([
+        "profile",
+        "shuftipro",
+        "shuftiproTemp",
+      ]);
+      if ($user->profile ?? false) {
+        $user->profile->makeVisible([ 'rep', 'rep_pending', ]);
+      }
+
       return [
         'success' => true,
         'me' => $user
