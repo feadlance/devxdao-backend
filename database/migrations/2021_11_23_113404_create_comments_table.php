@@ -15,7 +15,7 @@ class CreateCommentsTable extends Migration
     {
         Schema::create('comments', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('survey_id')->constrained('survey');
+            $table->foreignId('proposal_id')->constrained('proposal');
             $table->foreignId('user_id')->constrained();
             $table->foreignId('parent_id')->nullable();
             $table->text('comment');
