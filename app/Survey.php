@@ -21,11 +21,6 @@ class Survey extends Model
         return $this->hasMany('App\SurveyDownVoteRank', 'survey_id', 'id');
     }
 
-    public function comments()
-    {
-        return $this->hasMany(Comment::class);
-    }
-
     public function getEndTimeAttribute($value)
     {
         return Carbon::parse($value);
