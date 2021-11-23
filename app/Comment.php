@@ -10,9 +10,9 @@ class Comment extends Model
         'comment',
     ];
 
-    public function survey()
+    public function proposal()
     {
-        return $this->belongsTo(Survey::class);
+        return $this->belongsTo(Proposal::class);
     }
 
     public function user()
@@ -28,5 +28,10 @@ class Comment extends Model
     public function children()
     {
         return $this->hasMany(Comment::class, 'parent_id')->with('children');
+    }
+
+    public function votes()
+    {
+        return $this->hasMany(CommentVote::class);
     }
 }
