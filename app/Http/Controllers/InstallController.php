@@ -34,10 +34,12 @@ use App\EmailerTriggerUser;
 use App\EmailerTriggerMember;
 
 use App\Mail\Confirmation;
+use Illuminate\Support\Str;
 
 class InstallController extends Controller
 {
-    public function clear() {
+    public function clear()
+    {
         Bank::where('id', '>', 0)->delete();
         Crypto::where('id', '>', 0)->delete();
         Grant::where('id', '>', 0)->delete();
@@ -59,7 +61,8 @@ class InstallController extends Controller
         Proposal::where('id', '>', 0)->delete();
     }
 
-    public function installEmailer() {
+    public function installEmailer()
+    {
         // Setup Member
         $memberData = [
             [
@@ -352,8 +355,9 @@ class InstallController extends Controller
         }
     }
 
-    public function install() {
-		/* Setting Roles */
+    public function install()
+    {
+        /* Setting Roles */
         $role = Role::where(['name' => 'admin'])->first();
         if (!$role) Role::create(['name' => 'admin']);
 
@@ -384,8 +388,8 @@ class InstallController extends Controller
             $random_pw = Str::random(10);
             $user->password = Hash::make($random_pw);
             Log::info('Created admin');
-            Log::info('Email: '.$user->email);
-            Log::info('Password: '.$random_pw);
+            Log::info('Email: ' . $user->email);
+            Log::info('Password: ' . $random_pw);
             Log::info('');
             $user->confirmation_code = 'admin';
             $user->email_verified = 1;
@@ -423,8 +427,8 @@ class InstallController extends Controller
             $random_pw = Str::random(10);
             $user->password = Hash::make($random_pw);
             Log::info('Created admin');
-            Log::info('Email: '.$user->email);
-            Log::info('Password: '.$random_pw);
+            Log::info('Email: ' . $user->email);
+            Log::info('Password: ' . $random_pw);
             Log::info('');
             $user->confirmation_code = 'admin';
             $user->email_verified = 1;
@@ -462,8 +466,8 @@ class InstallController extends Controller
             $random_pw = Str::random(10);
             $user->password = Hash::make($random_pw);
             Log::info('Created admin');
-            Log::info('Email: '.$user->email);
-            Log::info('Password: '.$random_pw);
+            Log::info('Email: ' . $user->email);
+            Log::info('Password: ' . $random_pw);
             Log::info('');
             $user->confirmation_code = 'admin';
             $user->email_verified = 1;
@@ -501,8 +505,8 @@ class InstallController extends Controller
             $random_pw = Str::random(10);
             $user->password = Hash::make($random_pw);
             Log::info('Created admin');
-            Log::info('Email: '.$user->email);
-            Log::info('Password: '.$random_pw);
+            Log::info('Email: ' . $user->email);
+            Log::info('Password: ' . $random_pw);
             Log::info('');
             $user->confirmation_code = 'admin';
             $user->email_verified = 1;
@@ -540,8 +544,8 @@ class InstallController extends Controller
             $random_pw = Str::random(10);
             $user->password = Hash::make($random_pw);
             Log::info('Created admin');
-            Log::info('Email: '.$user->email);
-            Log::info('Password: '.$random_pw);
+            Log::info('Email: ' . $user->email);
+            Log::info('Password: ' . $random_pw);
             Log::info('');
             $user->confirmation_code = 'admin';
             $user->email_verified = 1;
@@ -579,8 +583,8 @@ class InstallController extends Controller
             $random_pw = Str::random(10);
             $user->password = Hash::make($random_pw);
             Log::info('Created admin');
-            Log::info('Email: '.$user->email);
-            Log::info('Password: '.$random_pw);
+            Log::info('Email: ' . $user->email);
+            Log::info('Password: ' . $random_pw);
             Log::info('');
             $user->confirmation_code = 'admin';
             $user->email_verified = 1;
@@ -690,5 +694,5 @@ class InstallController extends Controller
                 $user->save();
             }
         }
-	}
+    }
 }
