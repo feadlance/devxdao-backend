@@ -110,7 +110,7 @@ Route::group(['prefix' => 'shared', 'middleware' => ['auth:api']], function () {
 	Route::get('/proposal/{proposalId}/changes', 'SharedController@getProposalChanges');
 	Route::get('/proposal/{proposalId}/change/{proposalChangeId}', 'SharedController@getSingleProposalChange');
 	Route::get('/proposal/{proposalId}/change/{proposalChangeId}/comments', 'SharedController@getProposalChangeComments');
-	
+
 	Route::get('/pending-proposals', 'SharedController@getPendingProposals');
 	Route::get('/active-proposals', 'SharedController@getActiveProposals');
 	Route::get('/all-proposals', 'SharedController@getAllProposals');
@@ -150,6 +150,9 @@ Route::group(['prefix' => 'user', 'middleware' => ['auth:api']], function () {
 	Route::post('/check-mentor', 'UserController@checkMentor');
 	Route::post('/reputation-daily-csv', 'UserController@settingDailyCSVReputation');
 	Route::post('/check-send-kyc', 'UserController@checkSendKyc');
+	Route::post('/proposal/{proposalId}/comments', 'UserController@submitProposalComment');
+	Route::post('/comments/{commentId}/up', 'UserController@upVoteProposalComment');
+	Route::post('/comments/{commentId}/down', 'UserController@downVoteProposalComment');
 
 	// DELETE
 	Route::delete('/sponsor-code/{codeId}', 'UserController@revokeSponsorCode');
@@ -188,6 +191,7 @@ Route::group(['prefix' => 'user', 'middleware' => ['auth:api']], function () {
 	Route::get('/list-va', 'UserController@getListUserVA');
 	Route::get('/proposal/{proposalId}/milestone-not-submit', 'UserController@getMilestoneNotSubmit');
 	Route::get('/proposal/request-payment', 'UserController@getProposalRequestPayment');
+	Route::get('/proposal/{proposalId}/comments', 'UserController@getProposalComments');
 });
 
 // Admin Functions
@@ -227,7 +231,6 @@ Route::group(['prefix' => 'admin', 'middleware' => ['auth:api']], function () {
 	Route::get('/survey/{id}/user-vote', 'AdminController@getListUserVoteSurvey');
 	Route::get('/survey/{id}/user-not-submit', 'AdminController@getNotSubmittedSurvey');
 	Route::get('/user/{userId}/proposal-mentor', 'AdminController@getMentorProposal');
-
 
 	// POST
 	Route::post('/formal-voting', 'AdminController@startFormalVoting');
@@ -398,5 +401,4 @@ Route::group(['prefix' => 'compliance'], function () {
 	Route::get('/shared/milestone/export-csv', 'AdminController@exportMilestone');
 	Route::get('/shared/dos-fee/export-csv', 'AdminController@exportCSVDosFee');
 	Route::get('/shared/invoice-all/export-csv', 'ComplianceController@exportCSVInvoices');
-
 });
