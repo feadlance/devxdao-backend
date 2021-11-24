@@ -2078,7 +2078,7 @@ class UserController extends Controller
 
 		$comments = $proposal->comments()
 			->whereNull('parent_id')
-			->with('children')
+			->with(['children', 'user:id,first_name'])
 			->get();
 
 		return [
@@ -2137,6 +2137,14 @@ class UserController extends Controller
 		$vote->comment()->associate($comment);
 		$vote->user()->associate(auth()->user());
 		$vote->save();
+
+		if ($isUpVote) {
+			$comment->up_vote++;
+		} else {
+			$comment->down_vote++;
+		}
+
+		$comment->save();
 
 		return [
 			'success' => true,

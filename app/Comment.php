@@ -27,7 +27,7 @@ class Comment extends Model
 
     public function children()
     {
-        return $this->hasMany(Comment::class, 'parent_id')->with('children');
+        return $this->hasMany(Comment::class, 'parent_id')->with(['children', 'user:id,first_name']);
     }
 
     public function votes()
