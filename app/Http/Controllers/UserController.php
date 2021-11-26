@@ -8,7 +8,6 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Str;
 
 use App\Http\Helper;
 
@@ -2107,6 +2106,26 @@ class UserController extends Controller
 		$comment->user()->associate(auth()->user());
 		$comment->parent()->associate($request->parent_id);
 		$comment->proposal()->associate($proposal);
+		$comment->save();
+
+		return [
+			'success' => true,
+			'comment' => $comment,
+		];
+	}
+
+	public function destroyComment($commentId)
+	{
+		$comment = Comment::where('user_id', auth()->id())->find($commentId);
+
+		if (is_null($comment)) {
+			return [
+				'success' => false,
+				'message' => 'Not found comment'
+			];
+		}
+
+		$comment->message = 'Comment deleted by the user.';
 		$comment->save();
 
 		return [

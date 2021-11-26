@@ -153,6 +153,7 @@ Route::group(['prefix' => 'user', 'middleware' => ['auth:api']], function () {
 	Route::post('/proposal/{proposalId}/comments', 'UserController@submitProposalComment');
 	Route::post('/comments/{commentId}/up', 'UserController@upVoteProposalComment');
 	Route::post('/comments/{commentId}/down', 'UserController@downVoteProposalComment');
+	Route::delete('/comments/{commentId}', 'UserController@destroyComment');
 
 	// DELETE
 	Route::delete('/sponsor-code/{codeId}', 'UserController@revokeSponsorCode');
