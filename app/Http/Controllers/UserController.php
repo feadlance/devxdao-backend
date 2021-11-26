@@ -2125,7 +2125,7 @@ class UserController extends Controller
 			];
 		}
 
-		$comment->message = 'Comment deleted by the user.';
+		$comment->comment = 'Comment deleted by the user.';
 		$comment->save();
 
 		return [
@@ -2145,22 +2145,25 @@ class UserController extends Controller
 			];
 		}
 
-		if ($comment->votes()->where('user_id', auth()->id())->exists()) {
-			return [
-				'success' => false,
-				'message' => 'You have already voted'
-			];
-		}
+		$vote = $comment->votes()->where('user_id', auth()->id())->first();
 
-		$vote = new CommentVote(['is_up_vote' => $isUpVote]);
-		$vote->comment()->associate($comment);
-		$vote->user()->associate(auth()->user());
-		$vote->save();
+		if (is_null($vote)) {
+			$vote = new CommentVote(['is_up_vote' => $isUpVote]);
+			$vote->comment()->associate($comment);
+			$vote->user()->associate(auth()->user());
+			$vote->save();
 
-		if ($isUpVote) {
-			$comment->up_vote++;
+			$comment->{$isUpVote ? 'up_vote' : 'down_vote'}++;
 		} else {
-			$comment->down_vote++;
+			if ($vote->is_up_vote === $isUpVote) {
+				$comment->{$isUpVote ? 'up_vote' : 'down_vote'}--;
+				$vote->delete();
+			} else {
+				$comment->{!$isUpVote ? 'up_vote' : 'down_vote'}--;
+				$comment->{$isUpVote ? 'up_vote' : 'down_vote'}++;
+				$vote->is_up_vote = $isUpVote;
+				$vote->save();
+			}
 		}
 
 		$comment->save();
