@@ -2,7 +2,9 @@
 
 namespace App;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
 
 class Comment extends Model
 {
@@ -27,11 +29,26 @@ class Comment extends Model
 
     public function children()
     {
-        return $this->hasMany(Comment::class, 'parent_id')->with(['children', 'user:id,first_name']);
+        return $this->hasMany(Comment::class, 'parent_id')->recursive();
     }
 
     public function votes()
     {
         return $this->hasMany(CommentVote::class);
+    }
+
+    public function scopeRecursive(Builder $query)
+    {
+        return $query->with([
+            'children' => function ($query) {
+                return $query->sortByVote();
+            },
+            'user:id,first_name'
+        ]);
+    }
+
+    public function scopeSortByVote(Builder $query)
+    {
+        return $query->latest(DB::raw('`up_vote` - `down_vote`'));
     }
 }

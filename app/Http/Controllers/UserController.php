@@ -2077,7 +2077,8 @@ class UserController extends Controller
 
 		$comments = $proposal->comments()
 			->whereNull('parent_id')
-			->with(['children', 'user:id,first_name'])
+			->recursive()
+			->sortByVote()
 			->get();
 
 		return [
