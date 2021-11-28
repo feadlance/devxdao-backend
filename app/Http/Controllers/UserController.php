@@ -2147,6 +2147,7 @@ class UserController extends Controller
 		}
 
 		$vote = $comment->votes()->where('user_id', auth()->id())->first();
+		$affectedColumn = $isUpVote ? 'up_vote' : 'down_vote';
 
 		if (is_null($vote)) {
 			$vote = new CommentVote(['is_up_vote' => $isUpVote]);
@@ -2154,14 +2155,14 @@ class UserController extends Controller
 			$vote->user()->associate(auth()->user());
 			$vote->save();
 
-			$comment->{$isUpVote ? 'up_vote' : 'down_vote'}++;
+			$comment->{$affectedColumn}++;
 		} else {
 			if ($vote->is_up_vote === $isUpVote) {
-				$comment->{$isUpVote ? 'up_vote' : 'down_vote'}--;
+				$comment->{$affectedColumn}--;
 				$vote->delete();
 			} else {
 				$comment->{!$isUpVote ? 'up_vote' : 'down_vote'}--;
-				$comment->{$isUpVote ? 'up_vote' : 'down_vote'}++;
+				$comment->{$affectedColumn}++;
 				$vote->is_up_vote = $isUpVote;
 				$vote->save();
 			}
@@ -2171,7 +2172,12 @@ class UserController extends Controller
 
 		return [
 			'success' => true,
-			'vote' => $vote,
+			'data' => [
+				'up_vote' => $comment->up_vote,
+				'down_vote' => $comment->down_vote,
+				'up_voted_by_auth' => $comment->up_voted_by_auth,
+				'down_voted_by_auth' => $comment->down_voted_by_auth,
+			]
 		];
 	}
 
