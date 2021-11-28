@@ -12,6 +12,11 @@ class Comment extends Model
         'comment',
     ];
 
+    protected $appends = [
+        'up_voted_by_auth',
+        'down_voted_by_auth',
+    ];
+
     public function proposal()
     {
         return $this->belongsTo(Proposal::class);
@@ -20,6 +25,11 @@ class Comment extends Model
     public function user()
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function profile()
+    {
+        return $this->belongsTo(Profile::class, 'user_id', 'user_id');
     }
 
     public function parent()
@@ -43,12 +53,32 @@ class Comment extends Model
             'children' => function ($query) {
                 return $query->sortByVote();
             },
-            'user:id,first_name'
+            'profile:id,user_id,forum_name',
         ]);
     }
 
     public function scopeSortByVote(Builder $query)
     {
         return $query->latest(DB::raw('`up_vote` - `down_vote`'));
+    }
+
+    public function getUpVotedByAuthAttribute()
+    {
+        return $this->upVotedByAuth();
+    }
+
+    public function getDownVotedByAuthAttribute()
+    {
+        return $this->downVotedByAuth();
+    }
+
+    public function upVotedByAuth()
+    {
+        return $this->votes()->where('user_id', auth()->id())->where('is_up_vote', 1)->exists();
+    }
+
+    public function downVotedByAuth()
+    {
+        return $this->votes()->where('user_id', auth()->id())->where('is_up_vote', 0)->exists();
     }
 }
