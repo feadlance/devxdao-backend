@@ -2101,7 +2101,7 @@ class UserController extends Controller
 
 		$validated = $request->validate([
 			'parent_id' => ['nullable', 'exists:comments,id'],
-			'comment' => ['required', 'string', 'max:1000'],
+			'comment' => ['required', 'string', 'max:100000'],
 		]);
 
 		$comment = new Comment($validated);
