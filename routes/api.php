@@ -151,6 +151,7 @@ Route::group(['prefix' => 'user', 'middleware' => ['auth:api']], function () {
 	Route::post('/reputation-daily-csv', 'UserController@settingDailyCSVReputation');
 	Route::post('/check-send-kyc', 'UserController@checkSendKyc');
 	Route::post('/proposal/{proposalId}/comments', 'UserController@submitProposalComment');
+	Route::put('/comments/{commentId}', 'UserController@updateProposalComment');
 	Route::post('/comments/{commentId}/up', 'UserController@upVoteProposalComment');
 	Route::post('/comments/{commentId}/down', 'UserController@downVoteProposalComment');
 	Route::delete('/comments/{commentId}', 'UserController@destroyComment');

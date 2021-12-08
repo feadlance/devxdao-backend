@@ -2079,6 +2079,7 @@ class UserController extends Controller
 			->whereNull('parent_id')
 			->recursive()
 			->sortByVote()
+			->latest()
 			->get();
 
 		return [
@@ -2108,6 +2109,29 @@ class UserController extends Controller
 		$comment->parent()->associate($request->parent_id);
 		$comment->proposal()->associate($proposal);
 		$comment->save();
+
+		return [
+			'success' => true,
+			'comment' => $comment,
+		];
+	}
+
+	public function updateProposalComment(Request $request, $commentId)
+	{
+		$comment = Comment::where('user_id', auth()->id())->find($commentId);
+
+		if (is_null($comment)) {
+			return [
+				'success' => false,
+				'message' => 'Not found comment'
+			];
+		}
+
+		$validated = $request->validate([
+			'comment' => ['required', 'string', 'max:1000'],
+		]);
+
+		$comment->update($validated);
 
 		return [
 			'success' => true,
