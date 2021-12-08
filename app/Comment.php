@@ -32,11 +32,6 @@ class Comment extends Model
         return $this->belongsTo(Profile::class, 'user_id', 'user_id');
     }
 
-    public function reputation()
-    {
-        return $this->belongsTo(Reputation::class, 'user_id', 'user_id');
-    }
-
     public function parent()
     {
         return $this->belongsTo(Comment::class, 'parent_id');
@@ -58,7 +53,13 @@ class Comment extends Model
             'children' => function ($query) {
                 return $query->sortByVote()->latest();
             },
-            'reputation:id,user_id,value',
+            'user' => function ($query) {
+                return $query
+                    ->select('id')
+                    ->withCount(['reputations as reputations_count' => function ($query) {
+                        $query->select(DB::raw('Sum(`value`)'));
+                    }]);
+            },
             'profile:id,user_id,forum_name',
         ]);
     }
