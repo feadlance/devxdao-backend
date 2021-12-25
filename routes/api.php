@@ -150,11 +150,6 @@ Route::group(['prefix' => 'user', 'middleware' => ['auth:api']], function () {
 	Route::post('/check-mentor', 'UserController@checkMentor');
 	Route::post('/reputation-daily-csv', 'UserController@settingDailyCSVReputation');
 	Route::post('/check-send-kyc', 'UserController@checkSendKyc');
-	Route::post('/proposal/{proposalId}/comments', 'UserController@submitProposalComment');
-	Route::put('/comments/{commentId}', 'UserController@updateProposalComment');
-	Route::post('/comments/{commentId}/up', 'UserController@upVoteProposalComment');
-	Route::post('/comments/{commentId}/down', 'UserController@downVoteProposalComment');
-	Route::delete('/comments/{commentId}', 'UserController@destroyComment');
 
 	// DELETE
 	Route::delete('/sponsor-code/{codeId}', 'UserController@revokeSponsorCode');
@@ -193,7 +188,13 @@ Route::group(['prefix' => 'user', 'middleware' => ['auth:api']], function () {
 	Route::get('/list-va', 'UserController@getListUserVA');
 	Route::get('/proposal/{proposalId}/milestone-not-submit', 'UserController@getMilestoneNotSubmit');
 	Route::get('/proposal/request-payment', 'UserController@getProposalRequestPayment');
-	Route::get('/proposal/{proposalId}/comments', 'UserController@getProposalComments');
+
+	// Discourse
+	Route::group(['prefix' => 'discourse', 'namespace' => 'Discourse'], function () {
+		Route::put('posts/{post}/react', 'PostController@react');
+		Route::apiResource('posts', 'PostController')->only(['show', 'update', 'destroy']);
+		Route::apiResource('topics.posts', 'TopicPostController')->only(['index', 'store']);
+	});
 });
 
 // Admin Functions

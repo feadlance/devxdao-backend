@@ -29,6 +29,8 @@ use App\Mail\AdminAlert;
 use App\Mail\UserAlert;
 use App\Mail\ResetPasswordLink;
 use App\Mail\LoginTwoFA;
+use App\Services\DiscourseService;
+use Exception;
 
 class APIController extends Controller
 {
@@ -53,7 +55,7 @@ class APIController extends Controller
     }
 
     $user = DB::table('users')->join('profile', 'users.id', '=', 'profile.user_id')
-    ->where('users.is_member', 1)->where('users.email', $email_address)
+      ->where('users.is_member', 1)->where('users.email', $email_address)
       ->select(['users.id as user_id', 'users.email', 'users.first_name', 'users.last_name', 'profile.forum_name'])
       ->first();
     if ($user) {
@@ -80,9 +82,9 @@ class APIController extends Controller
     }
 
     $users = DB::table('users')->join('profile', 'users.id', '=', 'profile.user_id')
-    ->where('users.is_member', 1)
-    ->select(['users.id as user_id', 'users.email', 'users.first_name', 'users.last_name', 'profile.forum_name'])
-    ->get();
+      ->where('users.is_member', 1)
+      ->select(['users.id as user_id', 'users.email', 'users.first_name', 'users.last_name', 'profile.forum_name'])
+      ->get();
 
     return [
       'success' => true,
@@ -91,7 +93,8 @@ class APIController extends Controller
   }
 
 
-  public function resetPassword(Request $request) {
+  public function resetPassword(Request $request)
+  {
     // Validator
     $validator = Validator::make($request->all(), [
       'email' => 'required|email',
@@ -106,8 +109,8 @@ class APIController extends Controller
 
     // Token Check
     $temp = DB::table('password_resets')
-              ->where('email', $email)
-              ->first();
+      ->where('email', $email)
+      ->first();
     if (!$temp) return ['success' => false];
     if (!Hash::check($token, $temp->token)) return ['success' => false];
 
@@ -125,13 +128,14 @@ class APIController extends Controller
 
     // Clear Tokens
     DB::table('password_resets')
-        ->where('email', $email)
-        ->delete();
-    
+      ->where('email', $email)
+      ->delete();
+
     return ['success' => true];
   }
 
-  public function sendResetEmail(Request $request) {
+  public function sendResetEmail(Request $request)
+  {
     // This API always returns true
 
     // Validator
@@ -147,8 +151,8 @@ class APIController extends Controller
 
     // Clear Tokens
     DB::table('password_resets')
-        ->where('email', $email)
-        ->delete();
+      ->where('email', $email)
+      ->delete();
 
     // Generate New One
     $token = Str::random(60);
@@ -157,18 +161,19 @@ class APIController extends Controller
       'token' => Hash::make($token),
       'created_at' => Carbon::now()
     ]);
-    
+
     $resetUrl = $request->header('origin') . '/password/reset/' . $token . '?email=' . urlencode($email);
-    
+
     Mail::to($user)->send(new ResetPasswordLink($resetUrl));
 
     return ['success' => true];
   }
 
-  public function downloadCSV(Request $request) {
+  public function downloadCSV(Request $request)
+  {
     $filename = 'export_' . date('Y-m-d') . '_' . date('H:i:s') . '.csv';
     header('Content-Type: application/csv');
-    header('Content-Disposition: attachment; filename="'.$filename.'";');
+    header('Content-Disposition: attachment; filename="' . $filename . '";');
 
     $output = fopen('php://output', 'w');
     $action = $request->get('action');
@@ -201,12 +206,13 @@ class APIController extends Controller
             ]);
           }
         }
-      break;
+        break;
     }
   }
-  
-	public function login(Request $request) {
-		// Validator
+
+  public function login(Request $request, DiscourseService $discourse)
+  {
+    // Validator
     $validator = Validator::make($request->all(), [
       'email' => 'required',
       'password' => 'required'
@@ -222,9 +228,9 @@ class APIController extends Controller
     $password = $request->get('password');
 
     $user = User::with(['profile', 'shuftipro', 'shuftiproTemp', 'permissions'])
-                ->has('profile')
-                ->where('email', $email)
-                ->first();
+      ->has('profile')
+      ->where('email', $email)
+      ->first();
     if (!$user) {
       return [
         'success' => false,
@@ -233,14 +239,13 @@ class APIController extends Controller
     }
 
     if (
-    	(
-    		$user->hasRole('admin') || 
-        $user->hasRole('super-admin') || 
-    		$user->hasRole('member') || 
-        $user->hasRole('participant') || 
+      ($user->hasRole('admin') ||
+        $user->hasRole('super-admin') ||
+        $user->hasRole('member') ||
+        $user->hasRole('participant') ||
         $user->hasRole('guest')
-    	) && 
-    	$user->profile
+      ) &&
+      $user->profile
     ) {
       if (!Hash::check($password, $user->password)) {
         return [
@@ -271,7 +276,7 @@ class APIController extends Controller
       $ipHistory->save();
 
       $tokenResult = $user->createToken('User Access Token');
-      
+
       $user->accessTokenAPI = $tokenResult->accessToken;
 
       // Two FA Setting Check & Code Generate
@@ -287,7 +292,7 @@ class APIController extends Controller
 
       // Total Members
       $user->totalMembers = Helper::getTotalMembers();
-      
+
       // Membership Proposal
       $user->membership = Helper::getMembershipProposal($user);
       //check active survey
@@ -300,7 +305,25 @@ class APIController extends Controller
         "shuftiproTemp",
       ]);
       if ($user->profile ?? false) {
-        $user->profile->makeVisible([ 'rep', 'rep_pending', ]);
+        $user->profile->makeVisible(['rep', 'rep_pending',]);
+      }
+
+      try {
+        $findDiscourseUser = $discourse->user($user->profile->forum_name);
+
+        if (is_null($findDiscourseUser)) {
+          $registerToDiscord = $discourse->register($user);
+
+          if (isset($registerToDiscord['user_id'])) {
+            User::where('id', $user->id)->update([
+              'discourse_user_id' => $registerToDiscord['user_id']
+            ]);
+          } else {
+            info('Error when registering to discourse', [$registerToDiscord]);
+          }
+        }
+      } catch (Exception $e) {
+        info('Error when registering to discourse', [$e->getMessage()]);
       }
 
       return [
@@ -318,10 +341,11 @@ class APIController extends Controller
       'success' => false,
       'message' => 'Login info is not correct'
     ];
-	}
+  }
 
   // User Pre Registration
-  public function registerPre(Request $request) {
+  public function registerPre(Request $request)
+  {
     // Validator
     $validator = Validator::make($request->all(), [
       'email' => 'required|email',
@@ -381,7 +405,8 @@ class APIController extends Controller
   }
 
   // User Registration
-  public function register(Request $request) {
+  public function register(Request $request)
+  {
     // Validator
     $validator = Validator::make($request->all(), [
       'email' => 'required|email',
@@ -414,10 +439,10 @@ class APIController extends Controller
     $code = Str::random(6);
 
     if (
-      !$first_name || 
-      !$last_name || 
-      !$email || 
-      !$password || 
+      !$first_name ||
+      !$last_name ||
+      !$email ||
+      !$password ||
       !$forum_name
     ) {
       return [
@@ -459,10 +484,10 @@ class APIController extends Controller
     $user->email_verified = 0;
     $user->confirmation_code = $code;
     $user->is_participant = 1;
-    
+
     if (
-      $settings && 
-      isset($settings['need_to_approve']) && 
+      $settings &&
+      isset($settings['need_to_approve']) &&
       $settings['need_to_approve'] == 'no'
     )
       $user->can_access = 1;
@@ -485,7 +510,7 @@ class APIController extends Controller
     $profile->save();
 
     $user->assignRole('participant');
-    
+
     // Generate token and return
     Token::where([
       'user_id' => $user->id,
@@ -499,7 +524,7 @@ class APIController extends Controller
     $ipHistory->user_id = $user->id;
     $ipHistory->ip_address = request()->ip();
     $ipHistory->save();
-    
+
     $tokenResult = $user->createToken('User Access Token');
 
     $user->accessTokenAPI = $tokenResult->accessToken;
@@ -520,7 +545,7 @@ class APIController extends Controller
     $user->membership = Helper::getMembershipProposal($user);
 
     $emailerData = Helper::getEmailerData();
-    
+
     // Emailer Admin
     Helper::triggerAdminEmail('New User', $emailerData);
 
@@ -537,7 +562,8 @@ class APIController extends Controller
   }
 
   // Start Guest
-  public function startGuest(Request $request) {
+  public function startGuest(Request $request)
+  {
     $guest_key = $request->get('guest_key');
 
     if ($guest_key) {
@@ -589,12 +615,13 @@ class APIController extends Controller
   }
 
   // Resend Code
-  public function resendCode(Request $request) {
+  public function resendCode(Request $request)
+  {
     $user = Auth::user();
 
     if ($user) {
       $code = Str::random(6);
-      
+
       $user->confirmation_code = $code;
       $user->save();
 
@@ -607,22 +634,23 @@ class APIController extends Controller
     return ['success' => false];
   }
 
-	// Get Me
-	public function getMe(Request $request) {
-		$user = Auth::user();
+  // Get Me
+  public function getMe(Request $request)
+  {
+    $user = Auth::user();
 
     if ($user) {
       $userId = (int) $user->id;
       $user = User::with(['profile', 'shuftipro', 'shuftiproTemp', 'permissions'])
-                  ->where('id', $userId)
-                  ->first();
+        ->where('id', $userId)
+        ->first();
 
       // Total Members
       $user->totalMembers = Helper::getTotalMembers();
-      
+
       // Membership Proposal
       $user->membership = Helper::getMembershipProposal($user);
-      
+
       // check grant active
       $user->grant_active = Helper::checkPendingFinalGrant($user);
       $user->grant_proposal = Helper::checkGrantProposal($user);
@@ -636,7 +664,7 @@ class APIController extends Controller
         "shuftiproTemp",
       ]);
       if ($user->profile ?? false) {
-        $user->profile->makeVisible([ 'rep', 'rep_pending', ]);
+        $user->profile->makeVisible(['rep', 'rep_pending',]);
       }
 
       return [
@@ -646,14 +674,15 @@ class APIController extends Controller
     }
 
     return ['success' => false];
-	}
+  }
 
-	// Verify Code
-	public function verifyCode(Request $request) {
-		$code = $request->get('code');
-		$user = Auth::user();
+  // Verify Code
+  public function verifyCode(Request $request)
+  {
+    $code = $request->get('code');
+    $user = Auth::user();
 
-		if ($user && $user->confirmation_code == $code) {
+    if ($user && $user->confirmation_code == $code) {
       $user->email_verified = true;
       $user->email_verified_at = Date::now();
       $user->save();
@@ -661,10 +690,11 @@ class APIController extends Controller
     } else {
       return ['success' => false, 'message' => 'Confirmation code is invalid'];
     }
-	}
+  }
 
   // Complete Review Step 2
-  public function completeStepReview2(Request $request) {
+  public function completeStepReview2(Request $request)
+  {
     $user = Auth::user();
 
     if ($user) {

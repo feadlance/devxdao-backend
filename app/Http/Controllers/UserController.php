@@ -50,6 +50,7 @@ use App\Jobs\Test;
 use App\MilestoneReview;
 use App\ProposalDraft;
 use App\ProposalDraftFile;
+use App\Services\DiscourseService;
 use App\Survey;
 use App\SurveyDownVoteResult;
 use App\SurveyResult;
@@ -2062,30 +2063,6 @@ class UserController extends Controller
 		}
 
 		return ['success' => false];
-	}
-
-	public function getProposalComments($proposalId)
-	{
-		$proposal = Proposal::find($proposalId);
-
-		if (is_null($proposal)) {
-			return [
-				'success' => false,
-				'message' => 'Not found proposal'
-			];
-		}
-
-		$comments = $proposal->comments()
-			->whereNull('parent_id')
-			->recursive()
-			->sortByVote()
-			->latest()
-			->get();
-
-		return [
-			'success' => true,
-			'comments' => $comments,
-		];
 	}
 
 	public function submitProposalComment(Request $request, $proposalId)

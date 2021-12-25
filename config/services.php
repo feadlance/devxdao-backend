@@ -60,4 +60,10 @@ return [
         'token' => env('EXTERNAL_API_TOKEN'),
     ],
 
+    'discourse' => [
+        'url' => env('DISCOURSE_URL'),
+        'api_key' => env('DISCOURSE_API_KEY'),
+        'admin_username' => env('DISCOURSE_ADMIN_USERNAME'),
+    ]
+
 ];
