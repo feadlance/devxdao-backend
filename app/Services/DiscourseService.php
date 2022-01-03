@@ -5,6 +5,7 @@ namespace App\Services;
 use App\User;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
+use GuzzleHttp\Psr7\Query;
 use Illuminate\Support\Str;
 use Psr\Http\Message\ResponseInterface;
 
@@ -60,16 +61,23 @@ class DiscourseService
         });
     }
 
+    public function postReplies(string $id, string $username)
+    {
+        return $this->json($this->client->get("/posts/{$id}/replies.json", $this->by($username)));
+    }
+
     public function posts(string $username)
     {
         return $this->json($this->client->get('/posts.json', $this->by($username)));
     }
 
-    public function postsByTopicId(int $id, string $username)
+    public function postsByTopicId(int $id, string $postIds, string $username)
     {
-        $result = $this->json($this->client->get("/t/{$id}/posts.json", $this->by($username)));
+        $response = $this->client->get("/t/{$id}/posts.json", $this->by($username, [
+            'query' => Query::build(['post_ids[]' => explode(',', $postIds)]),
+        ]));
 
-        return $result['post_stream']['posts'];
+        return $this->json($response)['post_stream']['posts'];
     }
 
     public function like(int $id, string $username)
@@ -122,9 +130,24 @@ class DiscourseService
         return $action['acted'] ?? false;
     }
 
-    public function latest(string $username)
+    public function topic(int $id, string $username)
     {
-        return $this->json($this->client->get('/latest.json', $this->by($username)));
+        return $this->try(function () use ($id, $username) {
+            $response = $this->client->get("/t/{$id}.json", $this->by($username));
+
+            return $this->json($response);
+        });
+    }
+
+    public function topics(string $username, int $page = 0)
+    {
+        $response = $this->json(
+            $this->client->get('/latest.json', $this->by($username, [
+                'query' => ['page' => $page],
+            ]))
+        );
+
+        return $response['topic_list'];
     }
 
     public function search($term, string $username)
@@ -187,12 +210,12 @@ class DiscourseService
             return $callable();
         } catch (ClientException $e) {
             if (app()->environment('local')) {
-                throw $e;
-            } else {
-                $errors = $this->json($e->getResponse())['errors'] ?? ['Please try again.'];
-
-                return ['success' => false, 'message' => head($errors)];
+                info($e);
             }
+
+            $errors = $this->json($e->getResponse())['errors'] ?? ['Please try again.'];
+
+            return ['failed' => true, 'message' => head($errors)];
         }
     }
 }

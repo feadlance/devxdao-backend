@@ -11,10 +11,15 @@ use Illuminate\Support\Facades\DB;
 
 class TopicPostController extends Controller
 {
-    public function index(DiscourseService $discourse, $topic)
+    public function index(Request $request, DiscourseService $discourse, $topic)
     {
         $username = Auth::user()->profile->forum_name;
-        $posts = collect($discourse->postsByTopicId($topic, $username));
+
+        $posts = collect($discourse->postsByTopicId(
+            $topic,
+            $request->input('post_ids'),
+            $username
+        ));
 
         $users = User::query()
             ->select('profile.forum_name', DB::raw('Sum(`reputation`.`value`) as reputation'))
@@ -25,11 +30,10 @@ class TopicPostController extends Controller
 
         $posts->transform(function ($post) use ($users) {
             $post['devxdao_user'] = $users->firstWhere('forum_name', $post['username']);
-
             return $post;
         });
 
-        return ['success' => true, 'posts' => $posts];
+        return ['success' => true, 'data' => $posts];
     }
 
     public function store(Request $request, DiscourseService $discourse, $topic)
