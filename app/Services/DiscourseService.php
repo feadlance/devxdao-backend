@@ -30,6 +30,17 @@ class DiscourseService
         ]);
     }
 
+    public function updateTopic(int $id, array $data, string $username)
+    {
+        return $this->try(function () use ($id, $data, $username) {
+            $response = $this->client->put("/t/-/{$id}.json", $this->by($username, [
+                'form_params' => $data,
+            ]));
+
+            return $this->json($response);
+        });
+    }
+
     public function createPost(array $data, string $username)
     {
         return $this->try(function () use ($data, $username) {
