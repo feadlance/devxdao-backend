@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\TopicFlag;
+use App\TopicRead;
 use App\User;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
@@ -28,6 +30,11 @@ class DiscourseService
                 'Accept' => 'application/json',
             ],
         ]);
+    }
+
+    public function topicVARate($id)
+    {
+        return TopicRead::where('topic_id', $id)->count() / User::where('is_member', true)->count() * 100;
     }
 
     public function updateTopic(int $id, array $data, string $username)
@@ -190,6 +197,24 @@ class DiscourseService
         });
     }
 
+    public function grantModeration(int $userId)
+    {
+        return $this->try(function () use ($userId) {
+            $response = $this->client->put("/admin/users/{$userId}/grant_moderation.json");
+
+            return $this->json($response);
+        });
+    }
+
+    public function grantAdmin(int $userId)
+    {
+        return $this->try(function () use ($userId) {
+            $response = $this->client->put("/admin/users/{$userId}/grant_admin.json");
+
+            return $this->json($response);
+        });
+    }
+
     public function user(string $username)
     {
         try {
@@ -199,6 +224,22 @@ class DiscourseService
         } catch (ClientException $e) {
             return null;
         }
+    }
+
+    public function mergeWithFlags(array $posts)
+    {
+        $postIds = array_map(fn ($post) => $post['id'], $posts);
+
+        $topicFlags = TopicFlag::query()
+            ->select('id', 'topic_id', 'post_id', 'reason')
+            ->whereIn('post_id', $postIds)
+            ->get();
+
+        foreach ($posts as $key => $post) {
+            $posts[$key]['flag'] = $topicFlags->firstWhere('post_id', $post['id']);
+        }
+
+        return $posts;
     }
 
     private function json(ResponseInterface $response)

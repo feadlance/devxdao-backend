@@ -15,11 +15,13 @@ class TopicPostController extends Controller
     {
         $username = Auth::user()->profile->forum_name;
 
-        $posts = collect($discourse->postsByTopicId(
+        $posts = $discourse->postsByTopicId(
             $topic,
             $request->input('post_ids'),
             $username
-        ));
+        );
+
+        $posts = collect($discourse->mergeWithFlags($posts));
 
         $users = User::query()
             ->select('profile.forum_name', DB::raw('Sum(`reputation`.`value`) as reputation'))

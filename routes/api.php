@@ -193,6 +193,8 @@ Route::group(['prefix' => 'user', 'middleware' => ['auth:api']], function () {
 	Route::group(['prefix' => 'discourse', 'namespace' => 'Discourse'], function () {
 		Route::get('posts/{post}/replies', 'PostReplyController@index');
 		Route::put('posts/{post}/react', 'PostController@react');
+		Route::post('topics/{topic}/flag', 'TopicController@flag');
+		Route::put('topics/{topic}/readed', 'TopicController@markAsRead');
 		Route::apiResource('topics', 'TopicController');
 		Route::apiResource('posts', 'PostController')->only(['show', 'update', 'destroy']);
 		Route::apiResource('topics.posts', 'TopicPostController')->only(['index', 'store']);

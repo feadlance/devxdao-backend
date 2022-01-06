@@ -315,9 +315,15 @@ class APIController extends Controller
           $registerToDiscord = $discourse->register($user);
 
           if (isset($registerToDiscord['user_id'])) {
-            User::where('id', $user->id)->update([
-              'discourse_user_id' => $registerToDiscord['user_id']
-            ]);
+            $discourseUserId = $registerToDiscord['user_id'];
+
+            if ($user->hasRole('admin')) {
+              $discourse->grantModeration($discourseUserId);
+            } elseif ($user->hasRole('super-admin')) {
+              $discourse->grantAdmin($discourseUserId);
+            }
+
+            User::where('id', $user->id)->update(['discourse_user_id' => $discourseUserId]);
           } else {
             info('Error when registering to discourse', [$registerToDiscord]);
           }
