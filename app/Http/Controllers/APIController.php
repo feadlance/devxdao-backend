@@ -308,28 +308,30 @@ class APIController extends Controller
         $user->profile->makeVisible(['rep', 'rep_pending',]);
       }
 
-      try {
-        $findDiscourseUser = $discourse->user($user->profile->forum_name);
+      if (is_null($user->discourse_user_id)) {
+        try {
+          $findDiscourseUser = $discourse->user($user->profile->forum_name);
 
-        if (is_null($findDiscourseUser)) {
-          $registerToDiscord = $discourse->register($user);
+          if (is_null($findDiscourseUser)) {
+            $registerToDiscord = $discourse->register($user);
 
-          if (isset($registerToDiscord['user_id'])) {
-            $discourseUserId = $registerToDiscord['user_id'];
+            if (isset($registerToDiscord['user_id'])) {
+              $discourseUserId = $registerToDiscord['user_id'];
 
-            if ($user->hasRole('admin')) {
-              $discourse->grantModeration($discourseUserId);
-            } elseif ($user->hasRole('super-admin')) {
-              $discourse->grantAdmin($discourseUserId);
+              if ($user->hasRole('admin')) {
+                $discourse->grantModeration($discourseUserId);
+              } elseif ($user->hasRole('super-admin')) {
+                $discourse->grantAdmin($discourseUserId);
+              }
+
+              User::where('id', $user->id)->update(['discourse_user_id' => $discourseUserId]);
+            } else {
+              info('Error when registering to discourse', [$registerToDiscord]);
             }
-
-            User::where('id', $user->id)->update(['discourse_user_id' => $discourseUserId]);
-          } else {
-            info('Error when registering to discourse', [$registerToDiscord]);
           }
+        } catch (Exception $e) {
+          info('Error when registering to discourse', [$e->getMessage()]);
         }
-      } catch (Exception $e) {
-        info('Error when registering to discourse', [$e->getMessage()]);
       }
 
       return [
